@@ -1,0 +1,124 @@
+<Window x:Class="StrinowaWPF.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        Width="380" Height="260"
+        WindowStartupLocation="CenterOwner"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+
+    <Border Margin="8" CornerRadius="10"
+            x:Name="RootBorder"
+            Background="#1A1A1F"
+            BorderBrush="#2E2E38" BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="4" Opacity="0.6"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="34"/>
+                <RowDefinition Height="1"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="44"/>
+            </Grid.RowDefinitions>
+
+            <!-- Title bar -->
+            <Border Grid.Row="0" CornerRadius="10,10,0,0"
+                    x:Name="TitleBarBorder"
+                    Background="#111115"
+                    MouseLeftButtonDown="Window_MouseLeftButtonDown">
+                <Grid>
+                    <TextBlock Text="About"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontFamily="Segoe UI Variable Display, Segoe UI"
+                               FontSize="13" FontWeight="SemiBold"
+                               x:Name="TitleText"
+                               Foreground="#DDDDDD"/>
+                    <Button HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Width="46" Height="34"
+                            Background="Transparent" BorderThickness="0"
+                            FontFamily="Segoe MDL2 Assets" FontSize="10"
+                            Foreground="#AAAAAA" Cursor="Hand"
+                            Click="CloseBtn_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="0,8,0,0">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#C42B1C"/>
+                                        <Setter Property="Foreground" Value="White"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        &#xE8BB;
+                    </Button>
+                </Grid>
+            </Border>
+
+            <Rectangle Grid.Row="1" x:Name="SepRect" Fill="#222230"/>
+
+            <!-- Content -->
+            <StackPanel Grid.Row="2" Margin="28,20,28,0" VerticalAlignment="Center">
+                <TextBlock FontFamily="Cascadia Mono, Consolas, Courier New"
+                           FontSize="18" FontWeight="Bold"
+                           x:Name="AppTitle"
+                           Foreground="#DC3278" Margin="0,0,0,4">
+                    strinowa downloader ♡
+                </TextBlock>
+                <TextBlock FontFamily="Cascadia Mono, Consolas, Courier New"
+                           FontSize="12"
+                           x:Name="AppVersion"
+                           Foreground="#888888" Margin="0,0,0,14">
+                    v0.66.93 · built 2026-06-11
+                </TextBlock>
+                <TextBlock FontFamily="Segoe UI, Arial" FontSize="12"
+                           x:Name="AppDesc"
+                           Foreground="#CCCCCC" TextWrapping="Wrap" Margin="0,0,0,6">
+                    Strinova / PM game client downloader.
+                </TextBlock>
+                <TextBlock FontFamily="Segoe UI, Arial" FontSize="12"
+                           x:Name="AppCredit"
+                           Foreground="#888888" TextWrapping="Wrap">
+                    by Cecilia · zrobione dla Tosia ♡
+                </TextBlock>
+            </StackPanel>
+
+            <!-- OK button -->
+            <Border Grid.Row="3"
+                    x:Name="FooterBorder"
+                    BorderBrush="#222230" BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,10,10" Background="#0E0E16">
+                <Button Content="OK" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Width="90" Height="28"
+                        Click="CloseBtn_Click"
+                        Background="#DC3278" Foreground="White"
+                        BorderThickness="0"
+                        FontFamily="Segoe UI" FontSize="12"
+                        Cursor="Hand">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                    CornerRadius="6">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#C02868"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#A02050"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
