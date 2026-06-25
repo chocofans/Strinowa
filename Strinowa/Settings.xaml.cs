@@ -121,7 +121,7 @@ namespace StrinowaWPF
             ["ok"]                  = "OK",
             ["hint"]                = "<Game_Branch>  <OS|CN|PC|QQ>  <version>  [-b | -lb]",
             ["downloading"]         = "Downloading\u2026",
-            ["about_ver"]           = "Version 0.70 Beta 1 (Build 0.70.0056.20260621.0939)",
+            ["about_ver"]           = "Version 0.70 Beta 1 (Build 0.70.0089.20260624.0939)",
             ["about_desc"]          = "Strinova / PM game client downloader and version manager.",
             ["about_credit"]        = "by Cecilia \u00b7 zrobione dla Tosia \u2665",
         };
@@ -160,7 +160,7 @@ namespace StrinowaWPF
             ["ok"]                  = "\u786e\u5b9a",
             ["hint"]                = "<\u6e38\u620f\u5206\u652f>  <OS|CN|PC|QQ>  <\u7248\u672c>  [-b | -lb]",
             ["downloading"]         = "\u6b63\u5728\u4e0b\u8f7d\u2026",
-            ["about_ver"]           = "\u7248\u672c 0.70 Beta 1\uff08\u5185\u90e8\u7248\u672c 0.70.0056.20260621.0939\uff09",
+            ["about_ver"]           = "\u7248\u672c 0.70 Beta 1\uff08\u5185\u90e8\u7248\u672c 0.70.0089.20260624.0939\uff09",
             ["about_desc"]          = "Strinova / PM \u6e38\u620f\u5ba2\u6237\u7aef\u4e0b\u8f7d\u5668\u548c\u7248\u672c\u7ba1\u7406\u5668\u3002",
             ["about_credit"]        = "by Cecilia \u00b7 \u4e3a Tosia \u5236\u4f5c \u2665",
         };
@@ -199,7 +199,7 @@ namespace StrinowaWPF
             ["ok"]                  = "OK",
             ["hint"]                = "<Ga\u0142\u0105\u017a_Gry>  <OS|CN|PC|QQ>  <wersja>  [-b | -lb]",
             ["downloading"]         = "Pobieranie\u2026",
-            ["about_ver"]           = "Wersja 0.70 Beta 1 (Build 0.70.0056.20260621.0939)",
+            ["about_ver"]           = "Wersja 0.70 Beta 1 (Build 0.70.0089.20260624.0939)",
             ["about_desc"]          = "Pobieracz klienta gry Strinova / PM i mened\u017cer wersji.",
             ["about_credit"]        = "by Cecilia \u00b7 zrobione dla Tosia \u2665",
         };
@@ -495,11 +495,10 @@ namespace StrinowaWPF
             TermColorBDesc.Text     = Strings.Get("term_b_desc");
 
             // rows !
-            PreviewT1Label.Text          = Strings.Get("preview_t1");
-            PreviewT2Label.Text          = Strings.Get("preview_t2");
-            PreviewT3Label.Text          = Strings.Get("preview_t3");
-            PreviewDevkitLabel.Text      = Strings.Get("preview_devkit");
-            PreviewDeprecatedLabel.Text  = Strings.Get("preview_deprecated");
+            PreviewT1.Text         = Strings.Get("preview_t1");
+            PreviewT2.Text         = Strings.Get("preview_t2");
+            PreviewT3.Text         = Strings.Get("preview_t3");
+            PreviewDeprecated.Text = Strings.Get("preview_deprecated");
 
             string devkitText = Strings.Get("preview_devkit");
 

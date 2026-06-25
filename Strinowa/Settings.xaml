@@ -216,76 +216,30 @@
                     <Border x:Name="PreviewBorder" CornerRadius="6"
                             Background="#0E0E16" BorderBrush="#222230" BorderThickness="1"
                             Padding="12,10" Margin="0,0,0,20">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="14"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-
-                            <!-- i could not figure out how to make the descriptions translated-->
-                            <TextBlock x:Name="PreviewT1Label"
-                                       Grid.Row="0" Grid.Column="0"
-                                       Text="Text 1"
-                                       FontFamily="Cascadia Mono, Consolas, Courier New"
-                                       FontSize="12" Foreground="#555566" Margin="0,0,0,3"/>
-                            <TextBlock x:Name="PreviewT2Label"
-                                       Grid.Row="1" Grid.Column="0"
-                                       Text="Text 2"
-                                       FontFamily="Cascadia Mono, Consolas, Courier New"
-                                       FontSize="12" Foreground="#555566" Margin="0,0,0,3"/>
-                            <TextBlock x:Name="PreviewT3Label"
-                                       Grid.Row="2" Grid.Column="0"
-                                       Text="Text 3"
-                                       FontFamily="Cascadia Mono, Consolas, Courier New"
-                                       FontSize="12" Foreground="#555566" Margin="0,0,0,3"/>
-                            <TextBlock x:Name="PreviewDevkitLabel"
-                                       Grid.Row="3" Grid.Column="0"
-                                       Text="Devkit"
-                                       FontFamily="Cascadia Mono, Consolas, Courier New"
-                                       FontSize="12" Foreground="#555566" Margin="0,0,0,3"/>
-                            <TextBlock x:Name="PreviewDeprecatedLabel"
-                                       Grid.Row="4" Grid.Column="0"
-                                       Text="Deprecated"
-                                       FontFamily="Cascadia Mono, Consolas, Courier New"
-                                       FontSize="12" Foreground="#555566"
-                                       TextDecorations="Strikethrough"/>
-
+                        <StackPanel>
                             <TextBlock x:Name="PreviewT1"
-                                       Grid.Row="0" Grid.Column="2"
-                                       Text="Sample terminal output"
+                                       Text="Text 1"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#F0F0F0" Margin="0,0,0,3"/>
                             <TextBlock x:Name="PreviewT2"
-                                       Grid.Row="1" Grid.Column="2"
-                                       Text="China build message"
+                                       Text="Text 2"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#BBBBBB" Margin="0,0,0,3"/>
                             <TextBlock x:Name="PreviewT3"
-                                       Grid.Row="2" Grid.Column="2"
-                                       Text="Release build output"
+                                       Text="Text 3"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#999999" Margin="0,0,0,3"/>
                             <!-- WAVE -->
                             <TextBlock x:Name="PreviewDevkit"
-                                       Grid.Row="3" Grid.Column="2"
                                        Text="Devkit"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Margin="0,0,0,3"/>
                             <TextBlock x:Name="PreviewDeprecated"
-                                       Grid.Row="4" Grid.Column="2"
                                        Text="Deprecated"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#555566"
                                        TextDecorations="Strikethrough"/>
-                        </Grid>
+                        </StackPanel>
                     </Border>
 
                     <TextBlock x:Name="SectionLang"

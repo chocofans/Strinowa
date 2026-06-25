@@ -412,7 +412,6 @@ namespace StrinowaWPF
                 Margin       = new Thickness(0),
                 TextWrapping = TextWrapping.Wrap,
                 Cursor       = System.Windows.Input.Cursors.Hand,
-                ToolTip      = $"Click to download: {clickCommand}",
             };
             bool any = false;
             foreach (var sp in spans)
@@ -494,72 +493,101 @@ namespace StrinowaWPF
             await RunCommandAsync($"{ctx.Branch} {src.ToUpper()} {version}");
         }
 
-        BlockUIContainer? _loaderBlock = null;
-        DispatcherTimer?  _loaderTimer = null;
-        double            _loaderPhase = 0;
+        BlockUIContainer? _loaderBlock       = null;
+        DispatcherTimer?  _loaderTimer       = null;
+        double            _loaderPhase       = 0;
+        Border?           _loaderFillBorder  = null;
+        Border?           _loaderTrackBorder = null;
+        TextBlock?        _loaderLabelTb     = null;
 
-        void ShowLoader(string label = "")
+        void ShowLoader(string label = "Locating Versions")
         {
-            var canvas = new System.Windows.Controls.Canvas
+            var outerPanel = new StackPanel
             {
-                Width  = 28,
-                Height = 28,
-                Margin = new Thickness(12, 4, 0, 4),
+                Orientation = Orientation.Vertical,
+                Margin      = new Thickness(12, 4, 0, 4),
             };
 
-            var dot1 = new System.Windows.Shapes.Ellipse
-                { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE1, 0x14, 0x62)) };
-            var dot2 = new System.Windows.Shapes.Ellipse
-                { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x6F, 0xCA, 0xDC)) };
-            var dot3 = new System.Windows.Shapes.Ellipse
-                { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x3D, 0xB8, 0x8F)) };
-            var dot4 = new System.Windows.Shapes.Ellipse
-                { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE9, 0xA9, 0x20)) };
+            var topRow = new StackPanel { Orientation = Orientation.Horizontal };
 
-            canvas.Children.Add(dot1);
-            canvas.Children.Add(dot2);
-            canvas.Children.Add(dot3);
-            canvas.Children.Add(dot4);
-
-            var row = new System.Windows.Controls.StackPanel
+            var labelTb = new TextBlock
             {
-                Orientation = System.Windows.Controls.Orientation.Horizontal,
-                Margin      = new Thickness(0),
+                Text              = label,
+                FontFamily        = new FontFamily("Cascadia Mono, Consolas, Courier New"),
+                FontSize          = 13,
+                Foreground        = TC.Normal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin            = new Thickness(0, 0, 10, 0),
             };
-            row.Children.Add(canvas);
-            if (!string.IsNullOrEmpty(label))
-            {
-                row.Children.Add(new TextBlock
-                {
-                    Text       = label,
-                    FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
-                    FontSize   = 13,
-                    Foreground = TC.Dim,
-                    VerticalAlignment = VerticalAlignment.Center,
-                });
-            }
+            topRow.Children.Add(labelTb);
 
-            _loaderBlock = new BlockUIContainer(row) { Margin = new Thickness(0) };
+            var canvas = new Canvas { Width = 24, Height = 18 };
+            var dot1 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE1, 0x14, 0x62)) };
+            var dot2 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x6F, 0xCA, 0xDC)) };
+            var dot3 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x3D, 0xB8, 0x8F)) };
+            var dot4 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE9, 0xA9, 0x20)) };
+            canvas.Children.Add(dot1); canvas.Children.Add(dot2);
+            canvas.Children.Add(dot3); canvas.Children.Add(dot4);
+            topRow.Children.Add(canvas);
+            outerPanel.Children.Add(topRow);
+
+            var trackBorder = new Border
+            {
+                Height       = 2,
+                CornerRadius = new CornerRadius(1),
+                Background   = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x3A)),
+                Margin       = new Thickness(0, 4, 0, 0),
+            };
+            var fillBorder = new Border
+            {
+                Height              = 2,
+                CornerRadius        = new CornerRadius(1),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Width               = 0,
+            };
+            fillBorder.Background = new LinearGradientBrush(
+                Color.FromRgb(0xE1, 0x14, 0x62), Color.FromRgb(0x6F, 0xCA, 0xDC), 0.0);
+            trackBorder.Child = fillBorder;
+            outerPanel.Children.Add(trackBorder);
+
+            _loaderFillBorder  = fillBorder;
+            _loaderTrackBorder = trackBorder;
+            _loaderLabelTb     = labelTb;
+
+            _loaderBlock = new BlockUIContainer(outerPanel) { Margin = new Thickness(0) };
             TerminalBox.Document.Blocks.Add(_loaderBlock);
             ScrollToBottom();
 
             _loaderPhase = 0;
-            _loaderTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
-            _loaderTimer.Tick += (_, _) =>
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+            timer.Tick += (_, _) =>
             {
                 _loaderPhase += 0.08;
-                double cx = 11, cy = 11, r = 10;
-                double a1 = _loaderPhase, a2 = _loaderPhase + Math.PI, a3 = _loaderPhase + Math.PI / 2, a4 = _loaderPhase + 3 * Math.PI / 2;
-                System.Windows.Controls.Canvas.SetLeft(dot1, cx + r * Math.Cos(a1) - 3);
-                System.Windows.Controls.Canvas.SetTop(dot1,  cy + r * Math.Sin(a1) - 3);
-                System.Windows.Controls.Canvas.SetLeft(dot2, cx + r * Math.Cos(a2) - 3);
-                System.Windows.Controls.Canvas.SetTop(dot2,  cy + r * Math.Sin(a2) - 3);
-                System.Windows.Controls.Canvas.SetLeft(dot3, cx + r * Math.Cos(a3) - 3);
-                System.Windows.Controls.Canvas.SetTop(dot3,  cy + r * Math.Sin(a3) - 3);
-                System.Windows.Controls.Canvas.SetLeft(dot4, cx + r * Math.Cos(a4) - 3);
-                System.Windows.Controls.Canvas.SetTop(dot4,  cy + r * Math.Sin(a4) - 3);
+                double cx = 10, cy = 9, r = 7;
+                double a1 = _loaderPhase, a2 = _loaderPhase + Math.PI,
+                       a3 = _loaderPhase + Math.PI / 2, a4 = _loaderPhase + 3 * Math.PI / 2;
+                Canvas.SetLeft(dot1, cx + r * Math.Cos(a1) - 2.5); Canvas.SetTop(dot1, cy + r * Math.Sin(a1) - 2.5);
+                Canvas.SetLeft(dot2, cx + r * Math.Cos(a2) - 2.5); Canvas.SetTop(dot2, cy + r * Math.Sin(a2) - 2.5);
+                Canvas.SetLeft(dot3, cx + r * Math.Cos(a3) - 2.5); Canvas.SetTop(dot3, cy + r * Math.Sin(a3) - 2.5);
+                Canvas.SetLeft(dot4, cx + r * Math.Cos(a4) - 2.5); Canvas.SetTop(dot4, cy + r * Math.Sin(a4) - 2.5);
             };
-            _loaderTimer.Start();
+            timer.Start();
+            _loaderTimer = timer;
+        }
+
+        void UpdateLoaderProgress(int step, int total, string? label = null)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (_loaderFillBorder != null && _loaderTrackBorder != null)
+                {
+                    double frac   = total > 0 ? (double)step / total : 0;
+                    double trackW = _loaderTrackBorder.ActualWidth > 0 ? _loaderTrackBorder.ActualWidth : 200;
+                    _loaderFillBorder.Width = Math.Max(0, frac * trackW);
+                }
+                if (label != null && _loaderLabelTb != null)
+                    _loaderLabelTb.Text = label;
+            });
         }
 
         void HideLoader()
@@ -571,6 +599,9 @@ namespace StrinowaWPF
                 TerminalBox.Document.Blocks.Remove(_loaderBlock);
                 _loaderBlock = null;
             }
+            _loaderFillBorder  = null;
+            _loaderTrackBorder = null;
+            _loaderLabelTb     = null;
         }
 
         void ScrollToBottom() => TermScroll.ScrollToEnd();
@@ -690,12 +721,24 @@ namespace StrinowaWPF
                 return;
             }
 
-            // cls / clear comment out 2026-06-10
+            // cls / clear
             var rawLo = raw.Trim().ToLowerInvariant();
             if (rawLo is "cls" or "clear")
             {
                 ClearTerminal();
                 ShowHeader();
+                return;
+            }
+
+            if (rawLo is "help" or "?")
+            {
+                ShowHelp();
+                return;
+            }
+
+            if (rawLo is "branch" or "branches")
+            {
+                ShowBranches();
                 return;
             }
 
@@ -745,13 +788,6 @@ namespace StrinowaWPF
                 ShowHeader();
                 return;
             }
-            if (raw.Equals("help", StringComparison.OrdinalIgnoreCase) ||
-            raw.Equals("?", StringComparison.OrdinalIgnoreCase))
-            {
-                ShowHelp();
-                return;
-            }
-
             ShowHeader();
             var ctx = await ScanBranchAsync(branch, src, hiddenVer);
             if (ctx == null) { ShowHeader(); return; }
@@ -820,50 +856,83 @@ namespace StrinowaWPF
         void ShowHelp()
         {
             AppendLine([]);
+            AppendLine([new("  ══ Strinowa Help ══════════════════════════════════════", TC.Pink, true)]);
+            AppendLine([]);
+            AppendLine([new("  SCANNING", TC.Bold, true)]);
+            AppendLine([new("  Game_Release OS", TC.Release), new("         → scan Global game builds", TC.Dim)]);
+            AppendLine([new("  Game_Release CN", TC.Normal),  new("         → scan China game builds", TC.Dim)]);
+            AppendLine([new("  Game_Release", TC.CN),         new("              → scan all sources", TC.Dim)]);
+            AppendLine([new("  Launcher_Release OS", TC.Release), new("      → scan Global launcher builds", TC.Dim)]);
+            AppendLine([]);
+            AppendLine([new("  BRUTEFORCE", TC.Bold, true)]);
+            AppendLine([new("  Game_Test -b", TC.Devkit), new("             → bruteforce game versions", TC.Dim)]);
+            AppendLine([new("  Launcher_CE -lb", TC.Devkit), new("          → bruteforce launcher versions", TC.Dim)]);
+            AppendLine([new("  ", TC.Dim), new("All branches have a chance to contain hidden builds", TC.Warn)]);
+            AppendLine([new("  ", TC.Dim), new("not listed in the manifest. Use -b / -lb to bruteforce", TC.Dim)]);
+            AppendLine([new("  ", TC.Dim), new("a version range and discover unlisted builds.", TC.Dim)]);
+            AppendLine([]);
+            AppendLine([new("  HIDDEN VERSIONS", TC.Bold, true)]);
+            AppendLine([new("  Game_Test 1.6.0.1234", TC.Release), new("     → scan for a specific hidden version", TC.Dim)]);
+            AppendLine([new("  ", TC.Dim), new("Each branch may have versions removed from the manifest", TC.Dim)]);
+            AppendLine([new("  ", TC.Dim), new("but still accessible on CDN. Bruteforce to find them.", TC.Dim)]);
+            AppendLine([]);
+            AppendLine([new("  OTHER", TC.Bold, true)]);
+            AppendLine([new("  branch", TC.Release), new("                   → list all known branches", TC.Dim)]);
+            AppendLine([new("  help  /  ?", TC.Release), new("               → show this help", TC.Dim)]);
+            AppendLine([new("  cls  /  clear", TC.Release), new("            → clear the terminal", TC.Dim)]);
+            AppendLine([new("  <url>", TC.Release), new("                    → paste a direct CDN link to download", TC.Dim)]);
+            AppendLine([]);
+            AppendLine([new("  ═══════════════════════════════════════════════════════", TC.Pink)]);
+            AppendLine([]);
+        }
 
-            AppendLine(new TermSpan[]
-            {
-        new("  Strinowa Command Help", TC.Bold, true)
-            });
-
+        void ShowBranches()
+        {
+            AppendLine([]);
+            AppendLine([new("  ══ Known Branches ════════════════════════════════════", TC.Pink, true)]);
             AppendLine([]);
 
-            AppendLine(new TermSpan[]
-            {
-        new("  Game_<Channel> -b", TC.Release, true),
-        new("  → Run ", TC.Dim),
-        new("game bruteforce", TC.Info, true)
-            });
-
-            AppendLine(new TermSpan[]
-            {
-        new("  Launcher_<Channel> -lb", TC.Release, true),
-        new("  → Run ", TC.Dim),
-        new("launcher bruteforce", TC.Info, true)
-            });
-
-            AppendLine(new TermSpan[]
-            {
-        new("  Game_<Channel> CN", TC.Release, true),
-        new("  → Scan ", TC.Dim),
-        new("CN builds for that branch", TC.Info)
-            });
-
-            AppendLine(new TermSpan[]
-            {
-        new("  Game_<Channel> <Version>", TC.Release, true),
-        new("  → Scan for a ", TC.Dim),
-        new("hidden version", TC.Info, true),
-        new(" on that branch", TC.Dim)
-            });
+            AppendLine([new("  CHINA  ", TC.Normal, true), new("(CN · PC · QQ)", TC.Dim)]);
+            AppendLine([new("  cdn: klbq-cdn / klbqcp-client-cdn / down.klbq.qq.com", TC.Dim)]);
+            AppendLine([]);
+            string[] cnGame = { "Game_Release", "Game_KOL", "Game_TYF", "Game_Test", "Game_Dev", "Game_Dev2" };
+            string[] cnLaunch = { "Launcher_CE" };
+            foreach (var b in cnGame)    AppendLine([new("    " + b, TC.Normal)]);
+            AppendLine([]);
+            foreach (var b in cnLaunch)  AppendLine([new("    " + b, TC.CN)]);
 
             AppendLine([]);
-
-            AppendLine(new TermSpan[]
+            AppendLine([new("  GLOBAL  ", TC.Release, true), new("(OS)", TC.Dim)]);
+            AppendLine([new("  cdn: resource-download.strinova.com", TC.Dim)]);
+            AppendLine([]);
+            string[] osGame = { "Game_Release", "Game_Preview", "Game_2024EWC", "Game_KOL", "Game_CE",
+                                 "Game_PreTest", "Game_TestServer", "Game_Test" };
+            string[] osLaunch = { "Launcher_Release", "Launcher_Preview", "Launcher_2024EWC",
+                                   "Launcher_KOL", "Launcher_CE", "Launcher_PreTest",
+                                   "Launcher_TestServer", "Launcher_Test",
+                                   "Launcher_Strinova_Test", "Launcher_Strinova_TestL" };
+            foreach (var b in osGame)
             {
-        new("  You can also paste a direct URL to download files.", TC.Dim)
-            });
+                var extra = b == "Game_Test" ? new TermSpan("  ✓ downloaded", TC.Ok) : null;
+                var line  = new List<TermSpan> { new("    " + b, TC.Release) };
+                if (extra != null) line.Add(extra);
+                AppendLine(line);
+            }
+            AppendLine([]);
+            foreach (var b in osLaunch)  AppendLine([new("    " + b, TC.CN)]);
 
+            AppendLine([]);
+            AppendLine([new("  PC CLIENT  ", TC.CN, true), new("(PC)", TC.Dim)]);
+            AppendLine([new("  cdn: klbqcp-client-cdn.gxpan.cn", TC.Dim)]);
+            AppendLine([]);
+            string[] pcGame   = { "Game_IDSTest", "Game_Dev2", "Game_Release", "Game_TYF" };
+            string[] pcLaunch = { "Launcher_IDSRelease", "Launcher_IDSTest", "Launcher_IDSPreTest" };
+            foreach (var b in pcGame)    AppendLine([new("    " + b, TC.CN)]);
+            AppendLine([]);
+            foreach (var b in pcLaunch)  AppendLine([new("    " + b, TC.Dim)]);
+
+            AppendLine([]);
+            AppendLine([new("  ═══════════════════════════════════════════════════════", TC.Pink)]);
             AppendLine([]);
         }
 
@@ -900,7 +969,7 @@ namespace StrinowaWPF
             foreach (var key in tasks.Keys.ToList())
             {
                 step++;
-                SetStatusLine($"  Fetching {key} Builds [{step}/{totalSteps}]");
+                UpdateLoaderProgress(step, totalSteps, $"Locating Versions [{step}/{totalSteps}]");
                 await tasks[key];
             }
             HideLoader();
@@ -942,11 +1011,12 @@ namespace StrinowaWPF
             if (buildTasks.Count > 0)
             {
                 ShowLoader();
-                SetStatusLine("  Detecting build types…");
+                UpdateLoaderProgress(0, 1, "Identifying build types\u2026");
                 await Task.WhenAll(buildTasks.Values);
+                UpdateLoaderProgress(1, 1);
                 HideLoader();
             }
-            SetStatusLine("  Compiling build list…");
+            SetStatusLine("  Compiling build list\u2026");
             await Task.Delay(200);
             ClearStatusLine();
 
@@ -970,12 +1040,13 @@ namespace StrinowaWPF
             var os = results["OS"].vers;
             var cn = results["CN"].vers;
             var pc = results["PC"].vers;
+            // PM
 
             if ((allowedSource == null || allowedSource == "os")
                 && os.Count > 0 && maps.ContainsKey("OS"))
             {
                 var m = maps["OS"];
-                PrintVersionGroup($"OS {branch}", os, m.types, m.dates, m.exists, branch, "OS");
+                PrintVersionGroup(branch, os, m.types, m.dates, m.exists, branch, "OS");
             }
             if ((allowedSource == null || allowedSource == "pc" || allowedSource == "cn")
                 && (pc.Count > 0 || cn.Count > 0))
@@ -985,15 +1056,12 @@ namespace StrinowaWPF
                     var mpc = maps["PC"];
                     var merged = pc.Concat(cn).Distinct().OrderBy(v => v, new VersionComparer()).ToList();
 
+                    var prettyMerge = "China Client " + (branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase)
+                        ? branch[5..] : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
+                        ? "Launcher " + branch[9..] : branch);
+
                     AppendLine([]);
-                    AppendLine([
-                        new("  ", TC.Normal),
-                        new("PC", TC.CN, true),
-                        new(" / ", TC.Normal),
-                        new("CN", TC.Normal, true),
-                        new($" {branch} builds ({merged.Count}):  ", TC.Bold, true),
-                        new("[click a version to download]", TC.Dim),
-                    ]);
+                    AppendLine([new($"  {prettyMerge} builds ({merged.Count}):", TC.Bold, true)]);
 
                     int colW = merged.Max(v => v.Length) + 2;
                     maps.TryGetValue("CN", out var mcnEntry);
@@ -1046,7 +1114,7 @@ namespace StrinowaWPF
                 else if (cn.Count > 0 && maps.ContainsKey("CN"))
                 {
                     var mcn = maps["CN"];
-                    PrintVersionGroup($"CN {branch}", cn, mcn.types, mcn.dates, mcn.exists, branch, "CN");
+                    PrintVersionGroup(branch, cn, mcn.types, mcn.dates, mcn.exists, branch, "CN");
                 }
             }
 
@@ -1086,24 +1154,31 @@ namespace StrinowaWPF
                 ScrollToBottom();
             });
         }
+        static string PrettyBranchName(string branch, string source)
+        {
+            var region = source.ToUpper() switch { "OS" => "Global", _ => "China" };
+            var stripped = branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase)
+                ? branch[5..] : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
+                ? "Launcher " + branch[9..] : branch;
+            return $"{region} Client {stripped}";
+        }
+
         void PrintVersionGroup(string label, List<string> versions, Dictionary<string, string> types,
             Dictionary<string, DateTime?> dates, Dictionary<string, bool> exists, string branch,
             string source = "OS")
         {
-            // source color mapping: CN=Text1(Normal), PC=Text2(CN brush), OS=Text3(Release brush)
             SolidColorBrush sourceColor = source.ToUpper() switch
             {
                 "CN" => TC.Normal,
                 "PC" => TC.CN,
                 "QQ" => TC.CN,
-                _    => TC.Release, //PM?
+                _    => TC.Release,
             };
 
+            var prettyName = PrettyBranchName(branch, source);
+
             AppendLine([]);
-            AppendLine([
-                new($"  {label} builds ({versions.Count}):  ", TC.Bold, true),
-                new("[click a version to download]", TC.Dim),
-            ]);
+            AppendLine([new($"  {prettyName} builds ({versions.Count}):", TC.Bold, true)]);
             var colW = versions.Max(v => v.Length) + 2;
             foreach (var v in versions)
             {
@@ -1111,23 +1186,22 @@ namespace StrinowaWPF
                 if (t == "Development") t = "Devkit";
                 var removed = exists.TryGetValue(v, out var ex) && !ex;
                 SolidColorBrush color;
-                if (removed)         color = TC.Removed;
+                if (removed)            color = TC.Removed;
                 else if (t == "Devkit") color = TC.Devkit;
-                else                 color = sourceColor;
-                var dt = dates.GetValueOrDefault(v);
+                else                    color = sourceColor;
+                var dt    = dates.GetValueOrDefault(v);
                 var dtStr = dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "unknown";
-                var typeTag = $"[{t}]";
 
                 var line = new List<TermSpan>
                 {
                     new("  ", TC.Normal),
                     new($"{v.PadRight(colW)}", color),
-                    new($"  {typeTag,-13}", color),
+                    new($"  [{t}]", color),
                 };
                 if (removed)
-                    line.Add(new(" (File has been removed)", TC.Removed));
+                    line.Add(new(" (removed)", TC.Removed));
                 else
-                    line.Add(new($"  — {dtStr}", TC.Dim));
+                    line.Add(new($"  \u2014 {dtStr}", TC.Dim));
 
                 AppendClickableLine(line, $"dl {v} {source.ToLower()}");
             }
