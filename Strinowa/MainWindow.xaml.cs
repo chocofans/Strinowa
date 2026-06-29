@@ -754,6 +754,20 @@ namespace StrinowaWPF
             }
         }
 
+        void UpdateLoaderProgress(int step, int total, string text)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (_loaderBlock?.Child is StackPanel row)
+                {
+                    // label is the second child (index 1)
+                    if (row.Children.Count >= 2 && row.Children[1] is TextBlock tb)
+                    {
+                        tb.Text = text;
+                    }
+                }
+            });
+        }
         async Task DispatchAsync(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw))
@@ -1396,6 +1410,8 @@ namespace StrinowaWPF
                 AppendText("  Launcher download complete.", TC.Ok);
                 return;
             }
+
+
 
             string manifestText;
             if (manifestTextOpt == null)
