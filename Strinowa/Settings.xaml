@@ -142,9 +142,9 @@
                                            FontSize="10" HorizontalAlignment="Center"/>
                             </StackPanel>
                         </Border>
-                        
+
                         <!-- ADD GLASS -->
-                        
+
                         <!-- ADD ACRYLLIC -->
 
                     </UniformGrid>
@@ -216,30 +216,50 @@
                     <Border x:Name="PreviewBorder" CornerRadius="6"
                             Background="#0E0E16" BorderBrush="#222230" BorderThickness="1"
                             Padding="12,10" Margin="0,0,0,20">
-                        <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="0"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- i could not figure out how to make the descriptions translated-->
+
                             <TextBlock x:Name="PreviewT1"
+                                       Grid.Row="0" Grid.Column="2"
                                        Text="Text 1"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#F0F0F0" Margin="0,0,0,3"/>
                             <TextBlock x:Name="PreviewT2"
+                                       Grid.Row="1" Grid.Column="2"
                                        Text="Text 2"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#BBBBBB" Margin="0,0,0,3"/>
                             <TextBlock x:Name="PreviewT3"
+                                       Grid.Row="2" Grid.Column="2"
                                        Text="Text 3"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#999999" Margin="0,0,0,3"/>
                             <!-- WAVE -->
                             <TextBlock x:Name="PreviewDevkit"
+                                       Grid.Row="3" Grid.Column="2"
                                        Text="Devkit"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Margin="0,0,0,3"/>
                             <TextBlock x:Name="PreviewDeprecated"
+                                       Grid.Row="4" Grid.Column="2"
                                        Text="Deprecated"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="12" Foreground="#555566"
                                        TextDecorations="Strikethrough"/>
-                        </StackPanel>
+                        </Grid>
                     </Border>
 
                     <TextBlock x:Name="SectionLang"
@@ -268,7 +288,8 @@
                             </Border>
                         </Border>
 
-                        <!-- Chinese -->  <!--cn-->
+                        <!-- Chinese -->
+                        <!--cn-->
                         <Border x:Name="LangCn" Margin="3,0,3,0" CornerRadius="8"
                                 BorderThickness="2" BorderBrush="#2E2E38"
                                 Cursor="Hand" Height="48"
@@ -286,7 +307,8 @@
                             </Border>
                         </Border>
 
-                        <!-- Polish -->  <!--pl-->
+                        <!-- Polish -->
+                        <!--pl-->
                         <Border x:Name="LangPl" Margin="6,0,0,0" CornerRadius="8"
                                 BorderThickness="2" BorderBrush="#2E2E38"
                                 Cursor="Hand" Height="48"
@@ -306,7 +328,7 @@
 
                     </UniformGrid>
 
-            <!--  -->
+                    <!--  -->
                     <TextBlock x:Name="SectionOptions"
                                Text="OPTIONS"
                                FontFamily="Cascadia Mono, Consolas, Courier New"
@@ -376,40 +398,95 @@
                               Content="Acrylic background (Win11 22H2+)"
                               FontFamily="Segoe UI Variable Display, Segoe UI"
                               FontSize="12" Foreground="#CCCCCC" Margin="2,0,0,6"/>
-
-                    <StackPanel x:Name="AcrylicOpacityPanel" Margin="2,4,0,8">
-                        <TextBlock x:Name="AcrylicOpacityLabel"
-                                   Text="Background opacity"
-                                   FontFamily="Cascadia Mono, Consolas, Courier New"
-                                   FontSize="10" Foreground="#888888" Margin="0,0,0,4"/>
-                        <Slider x:Name="AcrylicSlider"
-                                Minimum="20" Maximum="100" Value="85"
-                                TickFrequency="5" IsSnapToTickEnabled="True"
-                                Width="200" HorizontalAlignment="Left"/>
-                    </StackPanel>
                     -->
 
-                    <!--
-                    for aurora youll change Columns="3" to Columns="4"
-                    in the LAUNCHER THEME UniformGrid to add this option
-
-                    <Border x:Name="ThemeMidnightAurora" Margin="6,0,0,0" CornerRadius="8"
-                            BorderThickness="2" BorderBrush="#2E2E38"
-                            Cursor="Hand" Height="64"
-                            MouseLeftButtonDown="ThemeMidnightAurora_Click">
-                        <Border Background="#000000" CornerRadius="7">
-                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                <TextBlock Text="Aurora" Foreground="#9988CC"
-                                           FontFamily="Segoe UI Variable Display, Segoe UI"
-                                           FontSize="12" FontWeight="SemiBold"
-                                           HorizontalAlignment="Center"/>
-                                <TextBlock Text="Animated" Foreground="#443366"
-                                           FontFamily="Segoe UI Variable Display, Segoe UI"
-                                           FontSize="10" HorizontalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
+                    <TextBlock x:Name="SectionSpeed"
+                               Text="DOWNLOAD SPEED (KB/s)"
+                               FontFamily="Cascadia Mono, Consolas, Courier New"
+                               FontSize="10" FontWeight="Bold"
+                               Foreground="#DC3278" Margin="0,12,0,6"/>
+                    <Border Background="#13131A" BorderBrush="#2E2E38" BorderThickness="1"
+                            CornerRadius="6" Width="180" Height="32" HorizontalAlignment="Left"
+                            Padding="10,0">
+                        <TextBox x:Name="SpeedBox"
+                                 Text="51200"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="#E8E8E8" CaretBrush="#DC3278"
+                                 FontFamily="Cascadia Mono, Consolas, Courier New"
+                                 FontSize="13" VerticalAlignment="Center"/>
                     </Border>
-                    -->
+
+                    <!-- ── WINDOW SIZE ── -->
+                    <TextBlock x:Name="SectionWindowSize"
+                               Text="WINDOW SIZE"
+                               FontFamily="Cascadia Mono, Consolas, Courier New"
+                               FontSize="10" FontWeight="Bold"
+                               Foreground="#DC3278" Margin="0,12,0,6"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <Border Background="#13131A" BorderBrush="#2E2E38" BorderThickness="1"
+                                CornerRadius="6" Width="80" Height="32" Padding="8,0">
+                            <TextBox x:Name="WinWidthBox"
+                                     Text="900"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="#E8E8E8" CaretBrush="#DC3278"
+                                     FontFamily="Cascadia Mono, Consolas, Courier New"
+                                     FontSize="13" VerticalAlignment="Center"/>
+                        </Border>
+                        <TextBlock Text=" × " Foreground="#666688"
+                                   FontFamily="Cascadia Mono, Consolas, Courier New"
+                                   FontSize="14" VerticalAlignment="Center" Margin="4,0"/>
+                        <Border Background="#13131A" BorderBrush="#2E2E38" BorderThickness="1"
+                                CornerRadius="6" Width="80" Height="32" Padding="8,0">
+                            <TextBox x:Name="WinHeightBox"
+                                     Text="560"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="#E8E8E8" CaretBrush="#DC3278"
+                                     FontFamily="Cascadia Mono, Consolas, Courier New"
+                                     FontSize="13" VerticalAlignment="Center"/>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ── LAUNCHER FORMAT ── -->
+                    <TextBlock x:Name="SectionLauncherFmt"
+                               Text="LAUNCHER FORMAT"
+                               FontFamily="Cascadia Mono, Consolas, Courier New"
+                               FontSize="10" FontWeight="Bold"
+                               Foreground="#DC3278" Margin="0,12,0,6"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <Border x:Name="FmtAsk" Margin="0,0,6,0" CornerRadius="6"
+                                BorderThickness="1.5" BorderBrush="#DC3278"
+                                Cursor="Hand" Height="36" Width="90"
+                                MouseLeftButtonDown="FmtAsk_Click">
+                            <Border Background="#13131A" CornerRadius="5">
+                                <TextBlock x:Name="FmtAskLabel" Text="Ask"
+                                           FontFamily="Cascadia Mono, Consolas, Courier New"
+                                           FontSize="11" Foreground="#E8E8E8"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Border>
+                        <Border x:Name="Fmt7z" Margin="0,0,6,0" CornerRadius="6"
+                                BorderThickness="1.5" BorderBrush="#2E2E38"
+                                Cursor="Hand" Height="36" Width="90"
+                                MouseLeftButtonDown="Fmt7z_Click">
+                            <Border Background="#13131A" CornerRadius="5">
+                                <TextBlock x:Name="Fmt7zLabel" Text="7z"
+                                           FontFamily="Cascadia Mono, Consolas, Courier New"
+                                           FontSize="11" Foreground="#E8E8E8"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Border>
+                        <Border x:Name="FmtExe" Margin="0,0,6,0" CornerRadius="6"
+                                BorderThickness="1.5" BorderBrush="#2E2E38"
+                                Cursor="Hand" Height="36" Width="90"
+                                MouseLeftButtonDown="FmtExe_Click">
+                            <Border Background="#13131A" CornerRadius="5">
+                                <TextBlock x:Name="FmtExeLabel" Text="EXE"
+                                           FontFamily="Cascadia Mono, Consolas, Courier New"
+                                           FontSize="11" Foreground="#E8E8E8"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Border>
+                    </StackPanel>
 
                 </StackPanel>
             </ScrollViewer>

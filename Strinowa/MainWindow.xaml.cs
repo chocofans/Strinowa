@@ -1,3 +1,4 @@
+using StrinowaWPF;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -23,25 +24,25 @@ namespace StrinowaWPF
     public static class TC
     {
         // These are theme-shifted at runtime by ApplyTheme() do not freeze
-        public static SolidColorBrush Normal     = new(Color.FromRgb(0xF0, 0xF0, 0xF0));
-        public static SolidColorBrush CN         = new(Color.FromRgb(0xBB, 0xBB, 0xBB));
-        public static SolidColorBrush Release    = new(Color.FromRgb(0x99, 0x99, 0x99));
+        public static SolidColorBrush Normal = new(Color.FromRgb(0xF0, 0xF0, 0xF0));
+        public static SolidColorBrush CN = new(Color.FromRgb(0xBB, 0xBB, 0xBB));
+        public static SolidColorBrush Release = new(Color.FromRgb(0x99, 0x99, 0x99));
         public static SolidColorBrush Deprecated = new(Color.FromRgb(0x55, 0x55, 0x55));
         // animated wave brush driven by DevkitColorAnimator do not freeze
-        public static SolidColorBrush Devkit     = new(Color.FromRgb(0xFF, 0x00, 0x4D));
+        public static SolidColorBrush Devkit = new(Color.FromRgb(0xFF, 0x00, 0x4D));
 
         // some of these arent used
-        public static readonly SolidColorBrush Dim     = new(Color.FromRgb(0x88, 0x88, 0x88));
-        public static readonly SolidColorBrush Dev     = new(Color.FromRgb(0xB4, 0x28, 0x78));
+        public static readonly SolidColorBrush Dim = new(Color.FromRgb(0x88, 0x88, 0x88));
+        public static readonly SolidColorBrush Dev = new(Color.FromRgb(0xB4, 0x28, 0x78));
         public static readonly SolidColorBrush Removed = new(Color.FromRgb(0x8C, 0x1E, 0x5A));
-        public static readonly SolidColorBrush Pink    = new(Color.FromRgb(0xDC, 0x32, 0x78));
-        public static readonly SolidColorBrush Info    = new(Color.FromRgb(0xC8, 0x40, 0x80));
-        public static readonly SolidColorBrush Ok      = new(Color.FromRgb(0x55, 0xCC, 0x88));
-        public static readonly SolidColorBrush Warn    = new(Color.FromRgb(0xFF, 0xCC, 0x44));
-        public static readonly SolidColorBrush Purple  = new(Color.FromRgb(0x8C, 0x00, 0xC8));
-        public static readonly SolidColorBrush Bold    = new(Color.FromRgb(0xFF, 0xFF, 0xFF));
-        public static readonly SolidColorBrush BrfOk  = new(Color.FromRgb(0xFF, 0x60, 0x8C));
-        public static readonly SolidColorBrush BrfMiss= new(Color.FromRgb(0x8C, 0x1E, 0x5A));
+        public static readonly SolidColorBrush Pink = new(Color.FromRgb(0xDC, 0x32, 0x78));
+        public static readonly SolidColorBrush Info = new(Color.FromRgb(0xC8, 0x40, 0x80));
+        public static readonly SolidColorBrush Ok = new(Color.FromRgb(0x55, 0xCC, 0x88));
+        public static readonly SolidColorBrush Warn = new(Color.FromRgb(0xFF, 0xCC, 0x44));
+        public static readonly SolidColorBrush Purple = new(Color.FromRgb(0x8C, 0x00, 0xC8));
+        public static readonly SolidColorBrush Bold = new(Color.FromRgb(0xFF, 0xFF, 0xFF));
+        public static readonly SolidColorBrush BrfOk = new(Color.FromRgb(0xFF, 0x60, 0x8C));
+        public static readonly SolidColorBrush BrfMiss = new(Color.FromRgb(0x8C, 0x1E, 0x5A));
     }
 
     record VersionItem(string RelPath, string Branch, string Version, string Url, string Dest)
@@ -53,6 +54,15 @@ namespace StrinowaWPF
     {
         public int Width { get; set; } = 900;
         public int Height { get; set; } = 560;
+        public string Theme { get; set; } = "Dark";
+        public string Color { get; set; } = "AdaptiveWhiteBlack";
+        public string Lang { get; set; } = "English";
+        public bool ClearLog { get; set; } = false;
+        public bool SaveBrf { get; set; } = false;
+        public int SpeedKBs { get; set; } = 51200;
+        public bool FmtAsked { get; set; } = false;
+        public bool Fmt7z { get; set; } = true;
+        public bool FmtExe { get; set; } = false;
 
         static readonly string Path = System.IO.Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory, "conf.ini");
@@ -70,6 +80,15 @@ namespace StrinowaWPF
                 var val = ln[(idx + 1)..].Trim();
                 if (key == "width" && int.TryParse(val, out int w)) cfg.Width = Math.Max(560, w);
                 if (key == "height" && int.TryParse(val, out int h)) cfg.Height = Math.Max(380, h);
+                if (key == "theme") cfg.Theme = val;
+                if (key == "color") cfg.Color = val;
+                if (key == "lang") cfg.Lang = val;
+                if (key == "clearlog" && bool.TryParse(val, out bool cl)) cfg.ClearLog = cl;
+                if (key == "savebrf" && bool.TryParse(val, out bool sb)) cfg.SaveBrf = sb;
+                if (key == "speedkbs" && int.TryParse(val, out int sp)) cfg.SpeedKBs = Math.Max(64, sp);
+                if (key == "fmtasked" && bool.TryParse(val, out bool fa)) cfg.FmtAsked = fa;
+                if (key == "fmt7z" && bool.TryParse(val, out bool f7)) cfg.Fmt7z = f7;
+                if (key == "fmtexe" && bool.TryParse(val, out bool fe)) cfg.FmtExe = fe;
             }
             return cfg;
         }
@@ -78,9 +97,11 @@ namespace StrinowaWPF
         {
             File.WriteAllText(Path,
                 $"; strinowa downloader - conf.ini\n" +
-                $"; Window size on startup.\n" +
-                $"width={Width}\n" +
-                $"height={Height}\n");
+                $"width={Width}\nheight={Height}\n" +
+                $"theme={Theme}\ncolor={Color}\nlang={Lang}\n" +
+                $"clearlog={ClearLog}\nsavebrf={SaveBrf}\n" +
+                $"speedkbs={SpeedKBs}\n" +
+                $"fmtasked={FmtAsked}\nfmt7z={Fmt7z}\nfmtexe={FmtExe}\n");
         }
     }
 
@@ -159,6 +180,17 @@ namespace StrinowaWPF
             _cfg = Config.Load();
             Width = _cfg.Width + 16;
             Height = _cfg.Height + 16;
+
+            if (Enum.TryParse<LauncherTheme>(_cfg.Theme, out var t)) AppTheme.CurrentTheme = t;
+            if (Enum.TryParse<TermColorPreset>(_cfg.Color, out var c)) AppTheme.CurrentTermPreset = c;
+            if (Enum.TryParse<AppLanguage>(_cfg.Lang, out var l)) Strings.Lang = l;
+            AppSettings.ClearLogOnFinish = _cfg.ClearLog;
+            AppSettings.SaveBruteforceToFile = _cfg.SaveBrf;
+            AppSettings.SpeedLimitKBs = _cfg.SpeedKBs;
+            AppSettings.LauncherFormatAsked = _cfg.FmtAsked;
+            AppSettings.LauncherDefault7z = _cfg.Fmt7z;
+            AppSettings.LauncherDefaultExe = _cfg.FmtExe;
+
             ApplyTheme();
             InputHint.Text = Strings.Get("hint");
             InputBox.Focus();
@@ -202,9 +234,9 @@ namespace StrinowaWPF
 
         public void ApplyTheme()
         {
-            bool isLight    = AppTheme.CurrentTheme == LauncherTheme.Light;
+            bool isLight = AppTheme.CurrentTheme == LauncherTheme.Light;
             bool isMidnight = AppTheme.CurrentTheme == LauncherTheme.Midnight;
-            bool isPink     = AppTheme.CurrentTermPreset == TermColorPreset.PinkAccent;
+            bool isPink = AppTheme.CurrentTermPreset == TermColorPreset.PinkAccent;
 
             // aurora
             // if (AppTheme.CurrentTheme == LauncherTheme.MidnightAurora)
@@ -223,110 +255,150 @@ namespace StrinowaWPF
             switch (AppTheme.CurrentTheme)
             {
                 case LauncherTheme.Dark:
-                    bgCol    = C(0x1A, 0x1A, 0x1F); titleCol = C(0x11, 0x11, 0x15);
-                    sepCol   = C(0x22, 0x22, 0x30); inputCol = C(0x13, 0x13, 0x1A);
+                    bgCol = C(0x1A, 0x1A, 0x1F); titleCol = C(0x11, 0x11, 0x15);
+                    sepCol = C(0x22, 0x22, 0x30); inputCol = C(0x13, 0x13, 0x1A);
                     break;
                 case LauncherTheme.Midnight:
-                    bgCol    = C(0x00, 0x00, 0x00); titleCol = C(0x00, 0x00, 0x00);
-                    sepCol   = C(0x18, 0x18, 0x26); inputCol = C(0x00, 0x00, 0x00);
+                    bgCol = C(0x00, 0x00, 0x00); titleCol = C(0x00, 0x00, 0x00);
+                    sepCol = C(0x18, 0x18, 0x26); inputCol = C(0x00, 0x00, 0x00);
                     break;
                 default: // Light
-                    bgCol    = C(0xE8, 0xE8, 0xF0); titleCol = C(0xD8, 0xD8, 0xE8);
-                    sepCol   = C(0xB0, 0xB0, 0xC8); inputCol = C(0xF5, 0xF5, 0xFF);
+                    bgCol = C(0xE8, 0xE8, 0xF0); titleCol = C(0xD8, 0xD8, 0xE8);
+                    sepCol = C(0xB0, 0xB0, 0xC8); inputCol = C(0xF5, 0xF5, 0xFF);
                     break;
             }
             var borderCol = isLight ? C(0xB0, 0xB0, 0xC8) : C(0x2E, 0x2E, 0x38);
 
-            Animate(OuterBorder,    Border.BackgroundProperty,    bgCol);
-            Animate(OuterBorder,    Border.BorderBrushProperty,   borderCol);
-            Animate(TitleBarBorder, Border.BackgroundProperty,    titleCol);
-            AnimateRect(SepRect,    sepCol);
-            Animate(InputRowBorder, Border.BackgroundProperty,    inputCol);
-            Animate(InputRowBorder, Border.BorderBrushProperty,   sepCol);
+            Animate(OuterBorder, Border.BackgroundProperty, bgCol);
+            Animate(OuterBorder, Border.BorderBrushProperty, borderCol);
+            Animate(TitleBarBorder, Border.BackgroundProperty, titleCol);
+            AnimateRect(SepRect, sepCol);
+            Animate(InputRowBorder, Border.BackgroundProperty, inputCol);
+            Animate(InputRowBorder, Border.BorderBrushProperty, sepCol);
 
-            var dlBgCol    = isMidnight ? C(0x00, 0x00, 0x00)
-                           : isLight    ? C(0xE0, 0xE0, 0xEC)
+            var dlBgCol = isMidnight ? C(0x00, 0x00, 0x00)
+                           : isLight ? C(0xE0, 0xE0, 0xEC)
                                         : C(0x0E, 0x0E, 0x16);
             var dlTrackCol = isMidnight ? C(0x10, 0x10, 0x18)
-                           : isLight    ? C(0xC0, 0xC0, 0xD4)
+                           : isLight ? C(0xC0, 0xC0, 0xD4)
                                         : C(0x1E, 0x1E, 0x2A);
-            Animate(DownloadPanel, Border.BackgroundProperty,  dlBgCol);
+            Animate(DownloadPanel, Border.BackgroundProperty, dlBgCol);
             Animate(DownloadPanel, Border.BorderBrushProperty, sepCol);
-            Animate(DlTrack,       Border.BackgroundProperty,  dlTrackCol);
+            Animate(DlTrack, Border.BackgroundProperty, dlTrackCol);
 
             if (isPink)
             {
                 //Text1=#FF004D, Text2=#FF0077, Text3=#F03A95, Devkit wave #B31741→#B033A3, Deprecated=#610E60 2026-06-18
-                TC.Normal     = B(0xFF, 0x00, 0x4D);
-                TC.CN         = B(0xFF, 0x00, 0x77);
-                TC.Release    = B(0xF0, 0x3A, 0x95);
+                TC.Normal = B(0xFF, 0x00, 0x4D);
+                TC.CN = B(0xFF, 0x00, 0x77);
+                TC.Release = B(0xF0, 0x3A, 0x95);
                 TC.Deprecated = B(0x61, 0x0E, 0x60);
                 TerminalBox.Foreground = TC.Normal;
 
-                DlLabel.Foreground    = B(0xFF, 0x00, 0x4D);
-                DlStats.Foreground    = B(0xFF, 0x00, 0x77);
+                DlLabel.Foreground = B(0xFF, 0x00, 0x4D);
+                DlStats.Foreground = B(0xFF, 0x00, 0x77);
                 DlSubLabel.Foreground = B(0xFF, 0x00, 0x77);
-                DlEta.Foreground      = B(0x61, 0x0E, 0x60);
+                DlEta.Foreground = B(0x61, 0x0E, 0x60);
 
                 SetDlFillColors(C(0xFF, 0x00, 0x4D), C(0x61, 0x0E, 0x60));
             }
             else if (isLight)
             {
-                TC.Normal    = B(0x33, 0x33, 0x44);
-                TC.CN        = B(0x66, 0x66, 0x88);
-                TC.Release   = B(0x77, 0x77, 0x99);
-                TC.Deprecated= B(0xAA, 0xAA, 0xBB);
+                TC.Normal = B(0x33, 0x33, 0x44);
+                TC.CN = B(0x66, 0x66, 0x88);
+                TC.Release = B(0x77, 0x77, 0x99);
+                TC.Deprecated = B(0xAA, 0xAA, 0xBB);
                 TerminalBox.Foreground = TC.Normal;
 
-                DlLabel.Foreground    = B(0x33, 0x33, 0x44);
-                DlStats.Foreground    = B(0x66, 0x66, 0x88);
+                DlLabel.Foreground = B(0x33, 0x33, 0x44);
+                DlStats.Foreground = B(0x66, 0x66, 0x88);
                 DlSubLabel.Foreground = B(0x66, 0x66, 0x88);
-                DlEta.Foreground      = B(0xAA, 0xAA, 0xBB);
+                DlEta.Foreground = B(0xAA, 0xAA, 0xBB);
 
                 SetDlFillColors(C(0x22, 0x22, 0x33), C(0x88, 0x88, 0xAA));
             }
             else
             {
-                TC.Normal    = B(0xF0, 0xF0, 0xF0);
-                TC.CN        = B(0xBB, 0xBB, 0xBB);
-                TC.Release   = B(0x99, 0x99, 0x99);
-                TC.Deprecated= B(0x55, 0x55, 0x55);
+                TC.Normal = B(0xF0, 0xF0, 0xF0);
+                TC.CN = B(0xBB, 0xBB, 0xBB);
+                TC.Release = B(0x99, 0x99, 0x99);
+                TC.Deprecated = B(0x55, 0x55, 0x55);
                 TerminalBox.Foreground = TC.Normal;
 
-                DlLabel.Foreground    = B(0xF0, 0xF0, 0xF0);
-                DlStats.Foreground    = B(0xBB, 0xBB, 0xBB);
+                DlLabel.Foreground = B(0xF0, 0xF0, 0xF0);
+                DlStats.Foreground = B(0xBB, 0xBB, 0xBB);
                 DlSubLabel.Foreground = B(0xBB, 0xBB, 0xBB);
-                DlEta.Foreground      = B(0x77, 0x77, 0x77);
+                DlEta.Foreground = B(0x77, 0x77, 0x77);
 
                 SetDlFillColors(C(0xFF, 0xFF, 0xFF), C(0x88, 0x88, 0x88));
             }
 
 
-            var titleFg  = isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
-            var hintFg   = isLight ? B(0x77, 0x77, 0x99) : B(0x40, 0x40, 0x55);
-            var inputFg  = isLight ? B(0x11, 0x11, 0x22) : B(0xE8, 0xE8, 0xE8);
-            var btnFg    = isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC);
+            var titleFg = isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
+            var hintFg = isLight ? B(0x77, 0x77, 0x99) : B(0x40, 0x40, 0x55);
+            var inputFg = isLight ? B(0x11, 0x11, 0x22) : B(0xE8, 0xE8, 0xE8);
+            var btnFg = isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC);
 
             TitleVersionText.Foreground = titleFg;
-            InputHint.Foreground        = hintFg;
-            InputBox.Foreground         = inputFg;
-            ChevronBlock.Foreground     = B(0xDC, 0x32, 0x78);
-            MinimizeBtn.Foreground      = btnFg;
-            CloseBtn.Foreground         = btnFg;
-            InputHint.Text              = Strings.Get("hint");
-            TitleVersionText.Text       = Strings.Get("title");
+            InputHint.Foreground = hintFg;
+            InputBox.Foreground = inputFg;
+            ChevronBlock.Foreground = B(0xDC, 0x32, 0x78);
+            MinimizeBtn.Foreground = btnFg;
+            CloseBtn.Foreground = btnFg;
+            InputHint.Text = Strings.Get("hint");
+            TitleVersionText.Text = Strings.Get("title");
 
             // Since shit got fucky when i removed the old one, this replaces the old one with the new one.
             // run elements that hold a reference to this brush update automatically.
             _devkitAnim.Stop();
             _devkitAnim = new DevkitColorAnimator(AppTheme.CurrentTermPreset);
+            TC.Devkit = _devkitAnim.Brush;
+
+            // Recolor all existing terminal runs so theme change applies immediately
+            RecolorTerminal();
         }
+
+        // Walk all blocks in the terminal and re-apply the correct brush for each color identity
+        void RecolorTerminal()
+        {
+            var brushMap = new Dictionary<SolidColorBrush, SolidColorBrush>
+            {
+                // map old instances to current TC brushes by color proximity is fragile —
+                // instead we compare reference to known TC fields set before calling this
+            };
+
+            foreach (var block in TerminalBox.Document.Blocks.ToList())
+            {
+                if (block is BlockUIContainer buc && buc.Child is TextBlock tb)
+                {
+                    foreach (var inline in tb.Inlines.ToList())
+                    {
+                        if (inline is Run r && r.Foreground is SolidColorBrush rb)
+                            r.Foreground = RemapBrush(rb);
+                    }
+                }
+            }
+        }
+
+        SolidColorBrush RemapBrush(SolidColorBrush old)
+        {
+            // remap by approximate color identity — covers the most common cases
+            var c = old.Color;
+            if (IsClose(c, TC.Normal.Color)) return TC.Normal;
+            if (IsClose(c, TC.CN.Color)) return TC.CN;
+            if (IsClose(c, TC.Release.Color)) return TC.Release;
+            if (IsClose(c, TC.Deprecated.Color)) return TC.Deprecated;
+            return old;
+        }
+
+        static bool IsClose(Color a, Color b, int tol = 12) =>
+            Math.Abs(a.R - b.R) <= tol && Math.Abs(a.G - b.G) <= tol && Math.Abs(a.B - b.B) <= tol;
 
         void SetDlFillColors(Color hi, Color lo)
         {
             if (DlFill.Background is LinearGradientBrush gb && gb.GradientStops.Count >= 3)
             {
-                var dur  = TimeSpan.FromMilliseconds(400);
+                var dur = TimeSpan.FromMilliseconds(400);
                 var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
                 gb.GradientStops[0].BeginAnimation(GradientStop.ColorProperty,
                     new ColorAnimation(hi, dur) { EasingFunction = ease });
@@ -339,11 +411,11 @@ namespace StrinowaWPF
 
         static void Animate(Border el, DependencyProperty prop, Color to)
         {
-            var dur  = TimeSpan.FromMilliseconds(300);
+            var dur = TimeSpan.FromMilliseconds(300);
             var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
             var current = el.GetValue(prop);
-            Color from  = current is SolidColorBrush scb ? scb.Color : Colors.Transparent;
-            var brush   = new SolidColorBrush(from);
+            Color from = current is SolidColorBrush scb ? scb.Color : Colors.Transparent;
+            var brush = new SolidColorBrush(from);
             el.SetValue(prop, brush);
             brush.BeginAnimation(SolidColorBrush.ColorProperty,
                 new ColorAnimation(to, dur) { EasingFunction = ease });
@@ -351,11 +423,11 @@ namespace StrinowaWPF
 
         static void AnimateRect(System.Windows.Shapes.Rectangle el, Color to)
         {
-            var dur  = TimeSpan.FromMilliseconds(300);
+            var dur = TimeSpan.FromMilliseconds(300);
             var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
             Color from = el.Fill is SolidColorBrush scb ? scb.Color : Colors.Transparent;
-            var brush  = new SolidColorBrush(from);
-            el.Fill    = brush;
+            var brush = new SolidColorBrush(from);
+            el.Fill = brush;
             brush.BeginAnimation(SolidColorBrush.ColorProperty,
                 new ColorAnimation(to, dur) { EasingFunction = ease });
         }
@@ -371,8 +443,8 @@ namespace StrinowaWPF
             var tb = new TextBlock
             {
                 FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
-                FontSize   = 13,
-                Margin     = new Thickness(0),
+                FontSize = 13,
+                Margin = new Thickness(0),
                 TextWrapping = TextWrapping.Wrap,
             };
 
@@ -388,8 +460,8 @@ namespace StrinowaWPF
             }
             if (!any) tb.Inlines.Add(new System.Windows.Documents.Run(""));
 
-            var dur   = _isFirstOpen ? TimeSpan.FromMilliseconds(80) : TimeSpan.FromMilliseconds(120);
-            var ease  = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var dur = _isFirstOpen ? TimeSpan.FromMilliseconds(80) : TimeSpan.FromMilliseconds(120);
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
             var xlate = new TranslateTransform(-16, 0);
             tb.RenderTransform = xlate;
             var slideAnim = new DoubleAnimation(0, dur) { EasingFunction = ease };
@@ -407,11 +479,12 @@ namespace StrinowaWPF
         {
             var tb = new TextBlock
             {
-                FontFamily   = new FontFamily("Cascadia Mono, Consolas, Courier New"),
-                FontSize     = 13,
-                Margin       = new Thickness(0),
+                FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
+                FontSize = 13,
+                Margin = new Thickness(0),
                 TextWrapping = TextWrapping.Wrap,
-                Cursor       = System.Windows.Input.Cursors.Hand,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = $"Click to download: {clickCommand}",
             };
             bool any = false;
             foreach (var sp in spans)
@@ -456,8 +529,8 @@ namespace StrinowaWPF
                 }
             };
 
-            var dur   = _isFirstOpen ? TimeSpan.FromMilliseconds(80) : TimeSpan.FromMilliseconds(120);
-            var ease  = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var dur = _isFirstOpen ? TimeSpan.FromMilliseconds(80) : TimeSpan.FromMilliseconds(120);
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
             var xlate = new TranslateTransform(-16, 0);
             tb.RenderTransform = xlate;
             var slideAnim = new DoubleAnimation(0, dur) { EasingFunction = ease };
@@ -493,101 +566,72 @@ namespace StrinowaWPF
             await RunCommandAsync($"{ctx.Branch} {src.ToUpper()} {version}");
         }
 
-        BlockUIContainer? _loaderBlock       = null;
-        DispatcherTimer?  _loaderTimer       = null;
-        double            _loaderPhase       = 0;
-        Border?           _loaderFillBorder  = null;
-        Border?           _loaderTrackBorder = null;
-        TextBlock?        _loaderLabelTb     = null;
+        BlockUIContainer? _loaderBlock = null;
+        DispatcherTimer? _loaderTimer = null;
+        double _loaderPhase = 0;
 
-        void ShowLoader(string label = "Locating Versions")
+        void ShowLoader(string label = "")
         {
-            var outerPanel = new StackPanel
+            var canvas = new System.Windows.Controls.Canvas
             {
-                Orientation = Orientation.Vertical,
-                Margin      = new Thickness(12, 4, 0, 4),
+                Width = 28,
+                Height = 28,
+                Margin = new Thickness(12, 4, 0, 4),
             };
 
-            var topRow = new StackPanel { Orientation = Orientation.Horizontal };
+            var dot1 = new System.Windows.Shapes.Ellipse
+            { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE1, 0x14, 0x62)) };
+            var dot2 = new System.Windows.Shapes.Ellipse
+            { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x6F, 0xCA, 0xDC)) };
+            var dot3 = new System.Windows.Shapes.Ellipse
+            { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x3D, 0xB8, 0x8F)) };
+            var dot4 = new System.Windows.Shapes.Ellipse
+            { Width = 6, Height = 6, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE9, 0xA9, 0x20)) };
 
-            var labelTb = new TextBlock
+            canvas.Children.Add(dot1);
+            canvas.Children.Add(dot2);
+            canvas.Children.Add(dot3);
+            canvas.Children.Add(dot4);
+
+            var row = new System.Windows.Controls.StackPanel
             {
-                Text              = label,
-                FontFamily        = new FontFamily("Cascadia Mono, Consolas, Courier New"),
-                FontSize          = 13,
-                Foreground        = TC.Normal,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin            = new Thickness(0, 0, 10, 0),
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                Margin = new Thickness(0),
             };
-            topRow.Children.Add(labelTb);
-
-            var canvas = new Canvas { Width = 24, Height = 18 };
-            var dot1 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE1, 0x14, 0x62)) };
-            var dot2 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x6F, 0xCA, 0xDC)) };
-            var dot3 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0x3D, 0xB8, 0x8F)) };
-            var dot4 = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Fill = new SolidColorBrush(Color.FromArgb(0xC0, 0xE9, 0xA9, 0x20)) };
-            canvas.Children.Add(dot1); canvas.Children.Add(dot2);
-            canvas.Children.Add(dot3); canvas.Children.Add(dot4);
-            topRow.Children.Add(canvas);
-            outerPanel.Children.Add(topRow);
-
-            var trackBorder = new Border
+            row.Children.Add(canvas);
+            if (!string.IsNullOrEmpty(label))
             {
-                Height       = 2,
-                CornerRadius = new CornerRadius(1),
-                Background   = new SolidColorBrush(Color.FromRgb(0x2A, 0x2A, 0x3A)),
-                Margin       = new Thickness(0, 4, 0, 0),
-            };
-            var fillBorder = new Border
-            {
-                Height              = 2,
-                CornerRadius        = new CornerRadius(1),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Width               = 0,
-            };
-            fillBorder.Background = new LinearGradientBrush(
-                Color.FromRgb(0xE1, 0x14, 0x62), Color.FromRgb(0x6F, 0xCA, 0xDC), 0.0);
-            trackBorder.Child = fillBorder;
-            outerPanel.Children.Add(trackBorder);
+                row.Children.Add(new TextBlock
+                {
+                    Text = label,
+                    FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
+                    FontSize = 13,
+                    Foreground = TC.Dim,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
 
-            _loaderFillBorder  = fillBorder;
-            _loaderTrackBorder = trackBorder;
-            _loaderLabelTb     = labelTb;
-
-            _loaderBlock = new BlockUIContainer(outerPanel) { Margin = new Thickness(0) };
+            _loaderBlock = new BlockUIContainer(row) { Margin = new Thickness(0) };
             TerminalBox.Document.Blocks.Add(_loaderBlock);
             ScrollToBottom();
 
             _loaderPhase = 0;
-            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
-            timer.Tick += (_, _) =>
+            _loaderTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+            _loaderTimer.Tick += (_, _) =>
             {
                 _loaderPhase += 0.08;
-                double cx = 10, cy = 9, r = 7;
-                double a1 = _loaderPhase, a2 = _loaderPhase + Math.PI,
-                       a3 = _loaderPhase + Math.PI / 2, a4 = _loaderPhase + 3 * Math.PI / 2;
-                Canvas.SetLeft(dot1, cx + r * Math.Cos(a1) - 2.5); Canvas.SetTop(dot1, cy + r * Math.Sin(a1) - 2.5);
-                Canvas.SetLeft(dot2, cx + r * Math.Cos(a2) - 2.5); Canvas.SetTop(dot2, cy + r * Math.Sin(a2) - 2.5);
-                Canvas.SetLeft(dot3, cx + r * Math.Cos(a3) - 2.5); Canvas.SetTop(dot3, cy + r * Math.Sin(a3) - 2.5);
-                Canvas.SetLeft(dot4, cx + r * Math.Cos(a4) - 2.5); Canvas.SetTop(dot4, cy + r * Math.Sin(a4) - 2.5);
+                double cx = 11, cy = 11, r = 10;
+                double a1 = _loaderPhase, a2 = _loaderPhase + Math.PI, a3 = _loaderPhase + Math.PI / 2, a4 = _loaderPhase + 3 * Math.PI / 2;
+                System.Windows.Controls.Canvas.SetLeft(dot1, cx + r * Math.Cos(a1) - 3);
+                System.Windows.Controls.Canvas.SetTop(dot1, cy + r * Math.Sin(a1) - 3);
+                System.Windows.Controls.Canvas.SetLeft(dot2, cx + r * Math.Cos(a2) - 3);
+                System.Windows.Controls.Canvas.SetTop(dot2, cy + r * Math.Sin(a2) - 3);
+                System.Windows.Controls.Canvas.SetLeft(dot3, cx + r * Math.Cos(a3) - 3);
+                System.Windows.Controls.Canvas.SetTop(dot3, cy + r * Math.Sin(a3) - 3);
+                System.Windows.Controls.Canvas.SetLeft(dot4, cx + r * Math.Cos(a4) - 3);
+                System.Windows.Controls.Canvas.SetTop(dot4, cy + r * Math.Sin(a4) - 3);
             };
-            timer.Start();
-            _loaderTimer = timer;
-        }
-
-        void UpdateLoaderProgress(int step, int total, string? label = null)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                if (_loaderFillBorder != null && _loaderTrackBorder != null)
-                {
-                    double frac   = total > 0 ? (double)step / total : 0;
-                    double trackW = _loaderTrackBorder.ActualWidth > 0 ? _loaderTrackBorder.ActualWidth : 200;
-                    _loaderFillBorder.Width = Math.Max(0, frac * trackW);
-                }
-                if (label != null && _loaderLabelTb != null)
-                    _loaderLabelTb.Text = label;
-            });
+            _loaderTimer.Start();
         }
 
         void HideLoader()
@@ -599,9 +643,6 @@ namespace StrinowaWPF
                 TerminalBox.Document.Blocks.Remove(_loaderBlock);
                 _loaderBlock = null;
             }
-            _loaderFillBorder  = null;
-            _loaderTrackBorder = null;
-            _loaderLabelTb     = null;
         }
 
         void ScrollToBottom() => TermScroll.ScrollToEnd();
@@ -721,24 +762,12 @@ namespace StrinowaWPF
                 return;
             }
 
-            // cls / clear
+            // cls / clear comment out 2026-06-10
             var rawLo = raw.Trim().ToLowerInvariant();
             if (rawLo is "cls" or "clear")
             {
                 ClearTerminal();
                 ShowHeader();
-                return;
-            }
-
-            if (rawLo is "help" or "?")
-            {
-                ShowHelp();
-                return;
-            }
-
-            if (rawLo is "branch" or "branches")
-            {
-                ShowBranches();
                 return;
             }
 
@@ -788,6 +817,13 @@ namespace StrinowaWPF
                 ShowHeader();
                 return;
             }
+            if (raw.Equals("help", StringComparison.OrdinalIgnoreCase) ||
+            raw.Equals("?", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowHelp();
+                return;
+            }
+
             ShowHeader();
             var ctx = await ScanBranchAsync(branch, src, hiddenVer);
             if (ctx == null) { ShowHeader(); return; }
@@ -797,6 +833,13 @@ namespace StrinowaWPF
             {
                 var dlChoice = await AskInput("");
                 if (string.IsNullOrWhiteSpace(dlChoice)) { ShowHeader(); break; }
+
+                // allow commands inside the post-scan loop
+                var dlLo = dlChoice.Trim().ToLowerInvariant();
+                if (dlLo is "cls" or "clear") { ClearTerminal(); ShowHeader(); continue; }
+                if (dlLo is "help" or "?") { ShowHelp(); continue; }
+                if (dlLo is "branch" or "branches") { ShowBranches(); continue; }
+                if (dlLo is "exit" or "back" or "q") { ShowHeader(); break; }
 
                 if (Regex.IsMatch(dlChoice, @"^\d+(?:\.\d+){1,}$"))
                 {
@@ -853,86 +896,77 @@ namespace StrinowaWPF
             }
         }
 
-        void ShowHelp()
+        void ShowBranches()
         {
+            if (_lastScanCtx == null || _lastScanCtx.Maps.Count == 0)
+            {
+                AppendText("  No branch scan loaded.", TC.Warn);
+                return;
+            }
+
             AppendLine([]);
-            AppendLine([new("  ══ Strinowa Help ══════════════════════════════════════", TC.Pink, true)]);
-            AppendLine([]);
-            AppendLine([new("  SCANNING", TC.Bold, true)]);
-            AppendLine([new("  Game_Release OS", TC.Release), new("         → scan Global game builds", TC.Dim)]);
-            AppendLine([new("  Game_Release CN", TC.Normal),  new("         → scan China game builds", TC.Dim)]);
-            AppendLine([new("  Game_Release", TC.CN),         new("              → scan all sources", TC.Dim)]);
-            AppendLine([new("  Launcher_Release OS", TC.Release), new("      → scan Global launcher builds", TC.Dim)]);
-            AppendLine([]);
-            AppendLine([new("  BRUTEFORCE", TC.Bold, true)]);
-            AppendLine([new("  Game_Test -b", TC.Devkit), new("             → bruteforce game versions", TC.Dim)]);
-            AppendLine([new("  Launcher_CE -lb", TC.Devkit), new("          → bruteforce launcher versions", TC.Dim)]);
-            AppendLine([new("  ", TC.Dim), new("All branches have a chance to contain hidden builds", TC.Warn)]);
-            AppendLine([new("  ", TC.Dim), new("not listed in the manifest. Use -b / -lb to bruteforce", TC.Dim)]);
-            AppendLine([new("  ", TC.Dim), new("a version range and discover unlisted builds.", TC.Dim)]);
-            AppendLine([]);
-            AppendLine([new("  HIDDEN VERSIONS", TC.Bold, true)]);
-            AppendLine([new("  Game_Test 1.6.0.1234", TC.Release), new("     → scan for a specific hidden version", TC.Dim)]);
-            AppendLine([new("  ", TC.Dim), new("Each branch may have versions removed from the manifest", TC.Dim)]);
-            AppendLine([new("  ", TC.Dim), new("but still accessible on CDN. Bruteforce to find them.", TC.Dim)]);
-            AppendLine([]);
-            AppendLine([new("  OTHER", TC.Bold, true)]);
-            AppendLine([new("  branch", TC.Release), new("                   → list all known branches", TC.Dim)]);
-            AppendLine([new("  help  /  ?", TC.Release), new("               → show this help", TC.Dim)]);
-            AppendLine([new("  cls  /  clear", TC.Release), new("            → clear the terminal", TC.Dim)]);
-            AppendLine([new("  <url>", TC.Release), new("                    → paste a direct CDN link to download", TC.Dim)]);
-            AppendLine([]);
-            AppendLine([new("  ═══════════════════════════════════════════════════════", TC.Pink)]);
+            AppendLine([new($"  Branches for {_lastScanCtx.Branch}:", TC.Bold, true)]);
+
+            foreach (var kv in _lastScanCtx.Maps.OrderBy(k => k.Key))
+            {
+                var versions = kv.Value.vers;
+                AppendLine([
+                    new("  ", TC.Normal),
+                    new(kv.Key.PadRight(4), TC.Release, true),
+                    new($"  {versions.Count} version{(versions.Count == 1 ? "" : "s")}", TC.Dim),
+                ]);
+            }
+
             AppendLine([]);
         }
 
-        void ShowBranches()
+        void ShowHelp()
         {
             AppendLine([]);
-            AppendLine([new("  ══ Known Branches ════════════════════════════════════", TC.Pink, true)]);
-            AppendLine([]);
 
-            AppendLine([new("  CHINA  ", TC.Normal, true), new("(CN · PC · QQ)", TC.Dim)]);
-            AppendLine([new("  cdn: klbq-cdn / klbqcp-client-cdn / down.klbq.qq.com", TC.Dim)]);
-            AppendLine([]);
-            string[] cnGame = { "Game_Release", "Game_KOL", "Game_TYF", "Game_Test", "Game_Dev", "Game_Dev2" };
-            string[] cnLaunch = { "Launcher_CE" };
-            foreach (var b in cnGame)    AppendLine([new("    " + b, TC.Normal)]);
-            AppendLine([]);
-            foreach (var b in cnLaunch)  AppendLine([new("    " + b, TC.CN)]);
-
-            AppendLine([]);
-            AppendLine([new("  GLOBAL  ", TC.Release, true), new("(OS)", TC.Dim)]);
-            AppendLine([new("  cdn: resource-download.strinova.com", TC.Dim)]);
-            AppendLine([]);
-            string[] osGame = { "Game_Release", "Game_Preview", "Game_2024EWC", "Game_KOL", "Game_CE",
-                                 "Game_PreTest", "Game_TestServer", "Game_Test" };
-            string[] osLaunch = { "Launcher_Release", "Launcher_Preview", "Launcher_2024EWC",
-                                   "Launcher_KOL", "Launcher_CE", "Launcher_PreTest",
-                                   "Launcher_TestServer", "Launcher_Test",
-                                   "Launcher_Strinova_Test", "Launcher_Strinova_TestL" };
-            foreach (var b in osGame)
+            AppendLine(new TermSpan[]
             {
-                var extra = b == "Game_Test" ? new TermSpan("  ✓ downloaded", TC.Ok) : null;
-                var line  = new List<TermSpan> { new("    " + b, TC.Release) };
-                if (extra != null) line.Add(extra);
-                AppendLine(line);
-            }
-            AppendLine([]);
-            foreach (var b in osLaunch)  AppendLine([new("    " + b, TC.CN)]);
+        new("  Strinowa Command Help", TC.Bold, true)
+            });
 
             AppendLine([]);
-            AppendLine([new("  PC CLIENT  ", TC.CN, true), new("(PC)", TC.Dim)]);
-            AppendLine([new("  cdn: klbqcp-client-cdn.gxpan.cn", TC.Dim)]);
-            AppendLine([]);
-            string[] pcGame   = { "Game_IDSTest", "Game_Dev2", "Game_Release", "Game_TYF" };
-            string[] pcLaunch = { "Launcher_IDSRelease", "Launcher_IDSTest", "Launcher_IDSPreTest" };
-            foreach (var b in pcGame)    AppendLine([new("    " + b, TC.CN)]);
-            AppendLine([]);
-            foreach (var b in pcLaunch)  AppendLine([new("    " + b, TC.Dim)]);
+
+            AppendLine(new TermSpan[]
+            {
+        new("  Game_<Channel> -b", TC.Release, true),
+        new("  → Run ", TC.Dim),
+        new("game bruteforce", TC.Info, true)
+            });
+
+            AppendLine(new TermSpan[]
+            {
+        new("  Launcher_<Channel> -lb", TC.Release, true),
+        new("  → Run ", TC.Dim),
+        new("launcher bruteforce", TC.Info, true)
+            });
+
+            AppendLine(new TermSpan[]
+            {
+        new("  Game_<Channel> CN", TC.Release, true),
+        new("  → Scan ", TC.Dim),
+        new("CN builds for that branch", TC.Info)
+            });
+
+            AppendLine(new TermSpan[]
+            {
+        new("  Game_<Channel> <Version>", TC.Release, true),
+        new("  → Scan for a ", TC.Dim),
+        new("hidden version", TC.Info, true),
+        new(" on that branch", TC.Dim)
+            });
 
             AppendLine([]);
-            AppendLine([new("  ═══════════════════════════════════════════════════════", TC.Pink)]);
+
+            AppendLine(new TermSpan[]
+            {
+        new("  You can also paste a direct URL to download files.", TC.Dim)
+            });
+
             AppendLine([]);
         }
 
@@ -965,11 +999,11 @@ namespace StrinowaWPF
             int totalSteps = tasks.Count;
             int step = 0;
 
-            ShowLoader();
+            ShowLoader(Strings.Get("locating"));
             foreach (var key in tasks.Keys.ToList())
             {
                 step++;
-                UpdateLoaderProgress(step, totalSteps, $"Locating Versions [{step}/{totalSteps}]");
+                UpdateLoaderProgress(step, totalSteps, $"{Strings.Get("locating")} [{step}/{totalSteps}]");
                 await tasks[key];
             }
             HideLoader();
@@ -987,7 +1021,7 @@ namespace StrinowaWPF
             string? prevCode = null;
             BuildResult? prevResult = null;
 
-          //foreach (var code in new[] { "OS", "CN", "PC", "QQ", PM })
+            //foreach (var code in new[] { "OS", "CN", "PC", "QQ", PM })
             foreach (var code in new[] { "OS", "CN", "PC", "QQ" }) // priority order so dont change.
             {
                 var (vers, revmap) = results[code];
@@ -1010,13 +1044,11 @@ namespace StrinowaWPF
             }
             if (buildTasks.Count > 0)
             {
-                ShowLoader();
-                UpdateLoaderProgress(0, 1, "Identifying build types\u2026");
+                ShowLoader(Strings.Get("identifying"));
                 await Task.WhenAll(buildTasks.Values);
-                UpdateLoaderProgress(1, 1);
                 HideLoader();
             }
-            SetStatusLine("  Compiling build list\u2026");
+            SetStatusLine($"  {Strings.Get("compiling")}");
             await Task.Delay(200);
             ClearStatusLine();
 
@@ -1040,13 +1072,12 @@ namespace StrinowaWPF
             var os = results["OS"].vers;
             var cn = results["CN"].vers;
             var pc = results["PC"].vers;
-            // PM
 
             if ((allowedSource == null || allowedSource == "os")
                 && os.Count > 0 && maps.ContainsKey("OS"))
             {
                 var m = maps["OS"];
-                PrintVersionGroup(branch, os, m.types, m.dates, m.exists, branch, "OS");
+                PrintVersionGroup($"OS {branch}", os, m.types, m.dates, m.exists, branch, "OS");
             }
             if ((allowedSource == null || allowedSource == "pc" || allowedSource == "cn")
                 && (pc.Count > 0 || cn.Count > 0))
@@ -1056,12 +1087,9 @@ namespace StrinowaWPF
                     var mpc = maps["PC"];
                     var merged = pc.Concat(cn).Distinct().OrderBy(v => v, new VersionComparer()).ToList();
 
-                    var prettyMerge = "China Client " + (branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase)
-                        ? branch[5..] : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
-                        ? "Launcher " + branch[9..] : branch);
-
+                    var mergeTitle = $"{Strings.Get("china_client")} {(branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase) ? branch[5..] : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher " + branch[9..] : branch)}";
                     AppendLine([]);
-                    AppendLine([new($"  {prettyMerge} builds ({merged.Count}):", TC.Bold, true)]);
+                    AppendLine([new($"  {mergeTitle} {Strings.Get("builds")} ({merged.Count}):", TC.Bold, true)]);
 
                     int colW = merged.Max(v => v.Length) + 2;
                     maps.TryGetValue("CN", out var mcnEntry);
@@ -1085,27 +1113,23 @@ namespace StrinowaWPF
                                 : (mcnEntry.exists != null && mcnEntry.exists.ContainsKey(v)
                                     ? mcnEntry.exists[v] : true);
 
-                        // CN and PC use Txt1/2 and OS uses TX3. reserves devkit/depre colors for their respective builds
                         SolidColorBrush color;
-                        if (!exists)           color = TC.Removed;
+                        if (!exists) color = TC.Deprecated;
                         else if (type == "Devkit") color = TC.Devkit;
-                        else if (inCN)         color = TC.Normal;   // CN → Text1
-                        else                   color = TC.CN;        // PC → Text2
+                        else if (inCN) color = TC.Normal;
+                        else color = TC.CN;
 
-                        var dtStr = date.HasValue
-                            ? date.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'")
-                            : "unknown";
+                        var dtStr = date.HasValue ? date.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "—";
+                        var tag = !exists ? $"[{Strings.Get("removed")}]" : $"[{type}]";
 
                         var line = new List<TermSpan>
                         {
                             new("  ", TC.Normal),
                             new($"{v.PadRight(colW)}", color),
-                            new($"  [{type}]", color),
+                            new($"  {tag,-15}", color),
                         };
-                        if (!exists)
-                            line.Add(new(" (File has been removed)", TC.Removed));
-                        else
-                            line.Add(new($"  — {dtStr}", TC.Dim));
+                        if (exists)
+                            line.Add(new($"  {dtStr}", TC.Dim));
 
                         var dlSrc = inCN ? "cn" : "pc";
                         AppendClickableLine(line, $"dl {v} {dlSrc}");
@@ -1135,9 +1159,9 @@ namespace StrinowaWPF
                     var tb0 = new TextBlock
                     {
                         FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
-                        FontSize   = 13,
+                        FontSize = 13,
                         Foreground = TC.Dim,
-                        Margin     = new Thickness(0),
+                        Margin = new Thickness(0),
                     };
                     TerminalBox.Document.Blocks.Add(new BlockUIContainer(tb0) { Margin = new Thickness(0) });
                     _hasStatusLine = true;
@@ -1156,11 +1180,11 @@ namespace StrinowaWPF
         }
         static string PrettyBranchName(string branch, string source)
         {
-            var region = source.ToUpper() switch { "OS" => "Global", _ => "China" };
-            var stripped = branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase)
-                ? branch[5..] : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
-                ? "Launcher " + branch[9..] : branch;
-            return $"{region} Client {stripped}";
+            var region = source.ToUpper() is "OS" ? Strings.Get("global_client") : Strings.Get("china_client");
+            var stripped = branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase) ? branch[5..]
+                         : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher " + branch[9..]
+                         : branch;
+            return $"{region} {stripped}";
         }
 
         void PrintVersionGroup(string label, List<string> versions, Dictionary<string, string> types,
@@ -1172,36 +1196,39 @@ namespace StrinowaWPF
                 "CN" => TC.Normal,
                 "PC" => TC.CN,
                 "QQ" => TC.CN,
-                _    => TC.Release,
+                _ => TC.Release,
             };
 
             var prettyName = PrettyBranchName(branch, source);
+            var buildsWord = Strings.Get("builds");
 
             AppendLine([]);
-            AppendLine([new($"  {prettyName} builds ({versions.Count}):", TC.Bold, true)]);
+            AppendLine([new($"  {prettyName} {buildsWord} ({versions.Count}):", TC.Bold, true)]);
+
             var colW = versions.Max(v => v.Length) + 2;
             foreach (var v in versions)
             {
                 var t = types.GetValueOrDefault(v, "Devkit");
                 if (t == "Development") t = "Devkit";
                 var removed = exists.TryGetValue(v, out var ex) && !ex;
+
                 SolidColorBrush color;
-                if (removed)            color = TC.Removed;
+                if (removed) color = TC.Deprecated;
                 else if (t == "Devkit") color = TC.Devkit;
-                else                    color = sourceColor;
-                var dt    = dates.GetValueOrDefault(v);
-                var dtStr = dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "unknown";
+                else color = sourceColor;
+
+                var dt = dates.GetValueOrDefault(v);
+                var dtStr = dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "—";
+                var tag = removed ? $"[{Strings.Get("removed")}]" : $"[{t}]";
 
                 var line = new List<TermSpan>
                 {
                     new("  ", TC.Normal),
                     new($"{v.PadRight(colW)}", color),
-                    new($"  [{t}]", color),
+                    new($"  {tag,-15}", color),
                 };
-                if (removed)
-                    line.Add(new(" (removed)", TC.Removed));
-                else
-                    line.Add(new($"  \u2014 {dtStr}", TC.Dim));
+                if (!removed)
+                    line.Add(new($"  {dtStr}", TC.Dim));
 
                 AppendClickableLine(line, $"dl {v} {source.ToLower()}");
             }
@@ -1233,6 +1260,20 @@ namespace StrinowaWPF
                 new ParallelOptions { MaxDegreeOfParallelism = 16 },
                 async (v, ct) =>
                 {
+                    if (branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var url = $"{baseRoot}/{branch}/{v}/full_{v}.7z";
+                        var (ok, lmts) = await ProbeUrlAsync(url);
+                        lock (lk)
+                        {
+                            types[v] = "Release";
+                            dates[v] = lmts;
+                            exists[v] = ok;
+                            choice[v] = branch;
+                        }
+                        return;
+                    }
+
                     var cands = BranchCandidates(v, revmap, branch);
                     string? foundType = null;
                     DateTime? foundDate = null;
@@ -1284,21 +1325,75 @@ namespace StrinowaWPF
 
         async Task CeciliaDownloadAsync(string baseRoot, string branch, string version, string? manifestTextOpt)
         {
-            if (branch.StartsWith("Launcher", StringComparison.OrdinalIgnoreCase))
+            if (branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase))
             {
-                var lUrl = $"{baseRoot}/{branch}/{version}/full_{version}.7z";
-                var (ok, _) = await ProbeUrlAsync(lUrl);
-                if (!ok) { AppendText("  The provided launcher build is not available.", TC.Warn); return; }
-                var lSz = await HeadSizeAsync(lUrl);
-                if (!await AskYesNo($"Download launcher {branch} {version} ({FormatSize(lSz)})?", defaultNo: true))
-                { AppendText("  Cancelled.", TC.Dim); return; }
-                var lDest = Path.Combine($"{branch}-{version}", $"full_{version}.7z");
-                Directory.CreateDirectory($"{branch}-{version}");
-                StartDlBar($"Downloading launcher {version}", 0, 1);
-                await DownloadFileAsync(lUrl, lDest, null);
-                StopDlBar();
+                // Launcher manifests list /Launcher/<ver>/..., but CDN downloads live directly under the launcher branch.
+                var launcherName = branch["Launcher_".Length..];
+                var installerPrefix = baseRoot.Equals(OS_ROOT, StringComparison.OrdinalIgnoreCase) ? "Strinova" : "Calabiyau";
+                var exeFileName = $"{installerPrefix}_Installer_{launcherName}_{version}.exe";
+                var lUrl7z = $"{baseRoot}/{branch}/{version}/full_{version}.7z";
+                var lUrlExe = $"{baseRoot}/{branch}/{version}/{exeFileName}";
+                var (has7z, _) = await ProbeUrlAsync(lUrl7z);
+                var (hasExe, _) = await ProbeUrlAsync(lUrlExe);
+
+                if (!has7z && !hasExe)
+                {
+                    AppendText($"  Launcher {version} is not available on this CDN.", TC.Warn);
+                    return;
+                }
+
+                bool dl7z = false, dlExe = false;
+                if (AppSettings.LauncherFormatAsked)
+                {
+                    dl7z = AppSettings.LauncherDefault7z && has7z;
+                    dlExe = AppSettings.LauncherDefaultExe && hasExe;
+                    if (!dl7z && !dlExe) dl7z = has7z;
+                }
+                else
+                {
+                    AppendLine([new($"  Launcher {version} — select format:", TC.Normal)]);
+                    if (has7z) AppendLine([new("    [1]  7z archive", TC.Release)]);
+                    if (hasExe) AppendLine([new("    [2]  EXE installer", TC.Release)]);
+                    if (has7z && hasExe) AppendLine([new("    [3]  Both", TC.Dim)]);
+                    var pick = (await AskInput("  choice >")).Trim();
+                    dl7z = pick is "1" or "3" || (!hasExe && has7z);
+                    dlExe = pick is "2" or "3" || (!has7z && hasExe);
+                    if (!dl7z && !dlExe) { AppendText("  Cancelled.", TC.Dim); return; }
+                }
+
+                if (dl7z && has7z)
+                {
+                    var lSz = await HeadSizeAsync(lUrl7z);
+                    if (!await AskYesNo($"Download {branch} {version} 7z ({FormatSize(lSz)})?", defaultNo: true))
+                    { AppendText("  Cancelled.", TC.Dim); }
+                    else
+                    {
+                        var dest = Path.Combine($"{branch}-{version}", $"full_{version}.7z");
+                        Directory.CreateDirectory($"{branch}-{version}");
+                        StartDlBar($"Downloading {version}.7z", lSz ?? 0, 1);
+                        await DownloadFileAsync(lUrl7z, dest, null);
+                        StopDlBar();
+                        AppendText($"  Saved \u2192 {dest}", TC.Ok);
+                    }
+                }
+                if (dlExe && hasExe)
+                {
+                    var eSz = await HeadSizeAsync(lUrlExe);
+                    if (!await AskYesNo($"Download {branch} {version} EXE ({FormatSize(eSz)})?", defaultNo: true))
+                    { AppendText("  Cancelled (EXE).", TC.Dim); }
+                    else
+                    {
+                        var dest = Path.Combine($"{branch}-{version}", exeFileName);
+                        Directory.CreateDirectory($"{branch}-{version}");
+                        StartDlBar($"Downloading {exeFileName}", eSz ?? 0, 1);
+                        await DownloadFileAsync(lUrlExe, dest, null);
+                        StopDlBar();
+                        AppendText($"  Saved \u2192 {dest}", TC.Ok);
+                    }
+                }
+
                 if (AppSettings.ClearLogOnFinish) ClearTerminal();
-                AppendText("  Your Strinowa launcher has downloaded.", TC.Ok);
+                AppendText("  Launcher download complete.", TC.Ok);
                 return;
             }
 
@@ -1438,21 +1533,25 @@ namespace StrinowaWPF
             });
         }
 
+        double _dlFillWavePhase = 0;
+
         void UpdateDlBar(object? s, EventArgs e)
         {
             var elapsed = (DateTime.UtcNow - _dlStart).TotalSeconds;
-            var speed = elapsed > 0.5 ? _dlBytes / elapsed : 0;
+            var speed = elapsed > 1.0 ? _dlBytes / elapsed : 0;
             var done = _dlDone;
             var total = _dlTotal;
             double frac = total > 0 ? Math.Min(1.0, (double)done / total) : -1;
 
-            DlStats.Text    = $"{_dlFilesDone}/{_dlFilesTotal} files";
-            DlSubLabel.Text = $"{FormatSize(done)} / {(total > 0 ? FormatSize(total) : "?")}   {FormatSize((long)speed)}/s";
+            DlStats.Text = $"{_dlFilesDone}/{_dlFilesTotal} files";
+            if (done > 0)
+                DlSubLabel.Text = $"{FormatSize(done)} / {(total > 0 ? FormatSize(total) : "?")}   {FormatSize((long)speed)}/s";
 
-            if (frac >= 0)
+            if (frac >= 0 && done > 0)
             {
-                var trackW = DownloadPanel.ActualWidth - 28;
+                var trackW = Math.Max(0, DownloadPanel.ActualWidth - 28);
                 DlFill.Width = Math.Max(0, frac * trackW);
+                DlFill.Margin = new Thickness(0);
                 var pct = (int)(frac * 100);
                 DlLabel.Text = DlLabel.Text.Split('[')[0].TrimEnd() + $"  {pct}%";
 
@@ -1461,12 +1560,24 @@ namespace StrinowaWPF
                     var eta = TimeSpan.FromSeconds((total - done) / speed);
                     DlEta.Text = $"ETA {eta:mm\\:ss}";
                 }
+
+                // wave gradient on the fill bar
+                _dlFillWavePhase = (_dlFillWavePhase + 0.06) % (Math.PI * 2);
+                double wave = (Math.Sin(_dlFillWavePhase) + 1.0) / 2.0;
+                var hiR = (byte)(0xDC + (int)((0xFF - 0xDC) * wave));
+                var lo = (byte)(0x32 + (int)((0x80 - 0x32) * wave));
+                if (DlFill.Background is LinearGradientBrush gb && gb.GradientStops.Count >= 2)
+                {
+                    gb.GradientStops[0].Color = Color.FromRgb(hiR, lo, 0x78);
+                    gb.GradientStops[1].Color = Color.FromRgb(0x8C, (byte)(wave * 0x60), 0xC8);
+                }
             }
-            else
+            else if (done == 0)
             {
+                // indeterminate bounce when total unknown or no bytes received yet
                 var trackW = Math.Max(1, DownloadPanel.ActualWidth - 28 - 60);
                 DlFill.Width = 60;
-                var off = (int)(elapsed * 200) % (int)trackW;
+                var off = (int)(elapsed * 160) % (int)Math.Max(1, trackW);
                 DlFill.Margin = new Thickness(off, 0, 0, 0);
             }
         }
@@ -1483,6 +1594,15 @@ namespace StrinowaWPF
             });
         }
 
+        bool _isPaused = false;
+        SemaphoreSlim _pauseSem = new(1, 1);
+
+        public void TogglePause()
+        {
+            _isPaused = !_isPaused;
+            if (!_isPaused) _pauseSem.Release();
+        }
+
         async Task DownloadFileAsync(string url, string dest, Action<long>? onProgress)
         {
             var tmp = dest + ".part";
@@ -1492,12 +1612,39 @@ namespace StrinowaWPF
             if (File.Exists(tmp)) File.Delete(tmp);
             await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
             await using var net = await resp.Content.ReadAsStreamAsync();
-            var buf = new byte[1 << 20]; // 1 MB buffer
+            var buf = new byte[1 << 16]; // 64 KB chunks for accurate throttle
             int read;
+            long chunkBytes = 0;
+            var chunkStart = DateTime.UtcNow;
+
             while ((read = await net.ReadAsync(buf)) > 0)
             {
+                // pause support
+                if (_isPaused)
+                {
+                    _pauseSem = new SemaphoreSlim(0, 1);
+                    await _pauseSem.WaitAsync();
+                }
+
                 await fs.WriteAsync(buf.AsMemory(0, read));
                 onProgress?.Invoke(read);
+                chunkBytes += read;
+
+                // speed throttle
+                var limitBps = (long)AppSettings.SpeedLimitKBs * 1024;
+                if (limitBps > 0)
+                {
+                    var elapsed = (DateTime.UtcNow - chunkStart).TotalSeconds;
+                    var expectedSec = (double)chunkBytes / limitBps;
+                    var wait = expectedSec - elapsed;
+                    if (wait > 0.005)
+                        await Task.Delay(TimeSpan.FromSeconds(wait));
+                    if (chunkBytes >= limitBps)
+                    {
+                        chunkBytes = 0;
+                        chunkStart = DateTime.UtcNow;
+                    }
+                }
             }
             fs.Close();
             if (File.Exists(dest)) File.Delete(dest);
@@ -1574,7 +1721,7 @@ namespace StrinowaWPF
                 return;
             }
             var source = srcRaw;
-            var isQq   = source == "qq";
+            var isQq = source == "qq";
 
             var startV = (await AskInput("<version number 1>")).Trim();
             if (!IsValidVersion(startV))
@@ -1584,7 +1731,7 @@ namespace StrinowaWPF
             if (!IsValidVersion(finishV))
             { AppendLine([new("  invalid version format", TC.Warn)]); return; }
 
-            var seq   = BuildGameSeq(startV, finishV);
+            var seq = BuildGameSeq(startV, finishV);
             int total = seq.Count, ok = 0, skip = 0, err = 0, done = 0;
             var found = new List<(string ver, string url)>();
 
@@ -1600,9 +1747,9 @@ namespace StrinowaWPF
 
             foreach (var (a, b, c, d) in seq)
             {
-                var ver  = $"{a}.{b}.{c}.{d}";
+                var ver = $"{a}.{b}.{c}.{d}";
                 var root = ChooseRootGame(source, (a, b, c, d));
-                var url  = $"{root}/{branch}/{ver}/full_zip/manifest.txt";
+                var url = $"{root}/{branch}/{ver}/full_zip/manifest.txt";
                 done++;
                 try
                 {
@@ -1660,7 +1807,7 @@ namespace StrinowaWPF
             if (AppSettings.SaveBruteforceToFile && found.Count > 0)
             {
                 var shortVer = string.Join(".", startV.Split('.').Take(3));
-                var fname    = $"StrinowaF1-{source.ToUpper()}-{shortVer}.txt";
+                var fname = $"StrinowaF1-{source.ToUpper()}-{shortVer}.txt";
                 try
                 {
                     var lines = new System.Collections.Generic.List<string>
@@ -1742,8 +1889,8 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                 return;
             }
             var source = srcRaw;
-            var root   = source switch { "cn" => CN_ROOT, "pc" => PC_ROOT, "qq" => QQ_ROOT, _ => OS_ROOT };
-            var isQq   = source == "qq";
+            var root = source switch { "cn" => CN_ROOT, "pc" => PC_ROOT, "qq" => QQ_ROOT, _ => OS_ROOT };
+            var isQq = source == "qq";
 
             var startV = (await AskInput("  start version   (e.g. 0.9.1.640) >")).Trim();
             if (!IsValidVersion(startV))
@@ -1763,10 +1910,10 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                 return;
             }
 
-            bool down  = d1 > d2;
-            int  total = Math.Abs(d1 - d2) + 1;
-            int  ok = 0, skip = 0, err = 0, done = 0;
-            var  found = new List<(string ver, string url)>();
+            bool down = d1 > d2;
+            int total = Math.Abs(d1 - d2) + 1;
+            int ok = 0, skip = 0, err = 0, done = 0;
+            var found = new List<(string ver, string url)>();
 
             AppendLine([]);
             AppendLine([
@@ -1838,7 +1985,7 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             if (AppSettings.SaveBruteforceToFile && found.Count > 0)
             {
                 var shortVer = string.Join(".", startV.Split('.').Take(3));
-                var fname    = $"StrinowaF1-{source.ToUpper()}-{shortVer}.txt";
+                var fname = $"StrinowaF1-{source.ToUpper()}-{shortVer}.txt";
                 try
                 {
                     var lines = new System.Collections.Generic.List<string>
@@ -1958,11 +2105,31 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                 {
                     var parts = ln.Split('|');
                     if (parts.Length < 2) continue;
+
+                    // LHS is "from_ver->to_ver" — use the right side (to_ver)
+                    var lhs = parts[0].Split(new[] { "->", "-&gt;" }, StringSplitOptions.None);
+                    var ver = (lhs.Length >= 2 ? lhs[1] : lhs[0]).Trim();
+
+                    // RHS path: /Launcher/<ver>/full_<ver>.7z  OR  /<subfolder>/<ver>/filename
                     var rel = parts[1].Trim().TrimStart('/');
                     var segs = rel.Split('/');
                     if (segs.Length < 2) continue;
-                    branches.TryAdd(segs[0], new());
-                    branches[segs[0]].Add(segs[1]);
+
+                    var folder = segs[0]; // "Launcher" for launcher, branch subfolder for game
+                    // If first path segment is "Launcher" (case-insensitive), the version is segs[1]
+                    // and we register it under the "Launcher" key which maps to the branch being scanned
+                    if (folder.Equals("Launcher", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var actualVer = IsValidVersion(ver) ? ver : (segs.Length > 1 ? segs[1] : ver);
+                        branches.TryAdd("Launcher", new());
+                        branches["Launcher"].Add(actualVer);
+                    }
+                    else
+                    {
+                        var actualVer = IsValidVersion(ver) ? ver : (IsValidVersion(segs[1]) ? segs[1] : ver);
+                        branches.TryAdd(folder, new());
+                        branches[folder].Add(actualVer);
+                    }
                 }
             }
             if (lastVer != null)
@@ -2016,7 +2183,7 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             body.Contains("PMGame-Win64-Shipping.exe") ||   //2021-01-01 - 2023-06-07
             body.Contains("Strinova-Win64-Shipping.exe") || //OS
             body.Contains("Calabiyau-Win64-Shipping.exe");  //CN
-        //CYGame-Win64-Shipping.exe?
+                                                            //CYGame-Win64-Shipping.exe?
 
         static DateTime? ParseLastMod(HttpResponseMessage r)
         {
@@ -2101,10 +2268,35 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             (s.Contains('_') || (s.StartsWith("Game", StringComparison.OrdinalIgnoreCase) && s.Length >= 5)
                              || (s.StartsWith("Launcher", StringComparison.OrdinalIgnoreCase) && s.Length >= 9));
 
+        void PauseBtn_Click(object s, RoutedEventArgs e)
+        {
+            TogglePause();
+            PauseBtn.Content = _isPaused ? "\uE768" : "\uE769";
+            PauseBtn.ToolTip = _isPaused ? Strings.Get("resume") : Strings.Get("pause");
+        }
+
+        void ReportBugBtn_Click(object s, RoutedEventArgs e)
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://github.com/chocofans/Strinowa/issues",
+                UseShellExecute = true,
+            });
+        }
+
         void CloseBtn_Click(object s, RoutedEventArgs e)
         {
             _cfg.Width = (int)(ActualWidth - 16);
             _cfg.Height = (int)(ActualHeight - 16);
+            _cfg.Theme = AppTheme.CurrentTheme.ToString();
+            _cfg.Color = AppTheme.CurrentTermPreset.ToString();
+            _cfg.Lang = Strings.Lang.ToString();
+            _cfg.ClearLog = AppSettings.ClearLogOnFinish;
+            _cfg.SaveBrf = AppSettings.SaveBruteforceToFile;
+            _cfg.SpeedKBs = AppSettings.SpeedLimitKBs;
+            _cfg.FmtAsked = AppSettings.LauncherFormatAsked;
+            _cfg.Fmt7z = AppSettings.LauncherDefault7z;
+            _cfg.FmtExe = AppSettings.LauncherDefaultExe;
             _cfg.Save();
             Close();
         }
