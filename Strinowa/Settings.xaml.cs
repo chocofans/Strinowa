@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -7,12 +8,13 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace StrinowaWPF
 {
-    public enum LauncherTheme { Dark, Midnight, Light }
+    public enum LauncherTheme { Dark, Midnight, Acrylic, Light }
 
     // aurora
     // public enum LauncherTheme { Dark, Midnight, MidnightAurora, Light }
@@ -63,17 +65,140 @@ namespace StrinowaWPF
     {
         [DllImport("dwmapi.dll")]
         static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
-        const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
 
-        public static void EnableAcrylic(Window w)
+        [DllImport("dwmapi.dll")]
+        static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
+
+        [DllImport("dwmapi.dll")]
+        static extern int DwmEnableBlurBehindWindow(IntPtr hwnd, ref DwmBlurBehind blurBehind);
+
+        [DllImport("dwmapi.dll")]
+        static extern int DwmFlush();
+
+        [DllImport("user32.dll")]
+        static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct Margins
         {
-            try { var hwnd = new WindowInteropHelper(w).Handle; int v = 4; DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref v, sizeof(int)); }
-            catch { }
+            public int Left;
+            public int Right;
+            public int Top;
+            public int Bottom;
         }
-        public static void DisableAcrylic(Window w)
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct DwmBlurBehind
         {
-            try { var hwnd = new WindowInteropHelper(w).Handle; int v = 0; DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref v, sizeof(int)); }
-            catch { }
+            public uint Flags;
+            public int Enable;
+            public IntPtr BlurRegion;
+            public int TransitionOnMaximized;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct AccentPolicy
+        {
+            public int AccentState;
+            public int AccentFlags;
+            public uint GradientColor;
+            public int AnimationId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct WindowCompositionAttributeData
+        {
+            public int Attribute;
+            public IntPtr Data;
+            public int SizeOfData;
+        }
+
+        const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
+        const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+        const int DWMSBT_NONE = 1;
+        const int DWMSBT_ACRYLIC = 3;
+        const int DWMWCP_ROUND = 2;
+        const int DWM_BB_ENABLE = 1;
+        const int WCA_ACCENT_POLICY = 19;
+        const int ACCENT_DISABLED = 0;
+        const int ACCENT_ENABLE_BLURBEHIND = 3;
+        const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
+
+        public static bool ApplyBackdrop(Window window, bool enabled, bool borderlessFullWindow = false)
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(window).Handle;
+                if (hwnd == IntPtr.Zero)
+                {
+                    EventHandler? applyWhenReady = null;
+                    applyWhenReady = (_, _) =>
+                    {
+                        window.SourceInitialized -= applyWhenReady;
+                        ApplyBackdrop(window, enabled, borderlessFullWindow);
+                    };
+                    window.SourceInitialized += applyWhenReady;
+                    return false;
+                }
+
+                int corner = DWMWCP_ROUND;
+                int dark = enabled ? 1 : 0;
+                DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+                DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+
+                int none = DWMSBT_NONE;
+                DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref none, sizeof(int));
+                var blurOff = new DwmBlurBehind { Flags = DWM_BB_ENABLE, Enable = 0 };
+                DwmEnableBlurBehindWindow(hwnd, ref blurOff);
+
+                SetAccent(hwnd, ACCENT_DISABLED, 0u);
+                DwmFlush();
+                int accentState = enabled ? ACCENT_ENABLE_ACRYLICBLURBEHIND : ACCENT_DISABLED;
+                uint tint = enabled
+                    ? (borderlessFullWindow ? 0x202B2B2Bu : 0x302B2B2Bu)
+                    : 0u;
+                bool accentApplied = SetAccent(hwnd, accentState, tint);
+
+                var margins = new Margins();
+                if (HwndSource.FromHwnd(hwnd) is { CompositionTarget: { } target })
+                    target.BackgroundColor = Colors.Transparent;
+                DwmExtendFrameIntoClientArea(hwnd, ref margins);
+                window.InvalidateVisual();
+                return accentApplied;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static bool SetAccent(IntPtr hwnd, int state, uint gradientColor)
+        {
+            var accent = new AccentPolicy
+            {
+                AccentState = state,
+                AccentFlags = 0,
+                GradientColor = gradientColor,
+                AnimationId = 0,
+            };
+                int accentSize = Marshal.SizeOf<AccentPolicy>();
+                IntPtr accentPointer = Marshal.AllocHGlobal(accentSize);
+                try
+                {
+                    Marshal.StructureToPtr(accent, accentPointer, false);
+                    var compositionData = new WindowCompositionAttributeData
+                    {
+                        Attribute = WCA_ACCENT_POLICY,
+                        Data = accentPointer,
+                        SizeOfData = accentSize,
+                    };
+                return SetWindowCompositionAttribute(hwnd, ref compositionData) != 0;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(accentPointer);
+                }
         }
     }
 
@@ -90,7 +215,7 @@ namespace StrinowaWPF
 
         static readonly Dictionary<string, string> _en = new() //the ai did the translations. sorry if they are poor.
         {
-            ["title"] = "Strinova v0.70 Beta 1",
+            ["title"] = "Strinowa v0.72",
             ["settings"] = "Settings",
             ["about"] = "About",
             ["launcher_theme"] = "LAUNCHER THEME",
@@ -100,6 +225,8 @@ namespace StrinowaWPF
             ["theme_midnight_sub"] = "Pure black",
             ["theme_light"] = "Light",
             ["theme_light_sub"] = "Bright UI",
+            ["theme_acrylic"] = "Acrylic",
+            ["theme_acrylic_sub"] = "Blurred glass",
             ["terminal_color"] = "TERMINAL TEXT COLOR",
             ["term_note"] = "Text colors adapt to theme and build type.",
             ["term_a_label"] = "Adaptive White / Black",
@@ -119,9 +246,9 @@ namespace StrinowaWPF
             ["apply"] = "Apply",
             ["cancel"] = "Cancel",
             ["ok"] = "OK",
-            ["hint"] = "<Game_Branch>  <OS|CN|PC|QQ>  <version>  [-b | -lb]",
+            ["hint"] = "<Game_Branch>  <OS|CN|PC>  <version>  [-b]",
             ["downloading"] = "Downloading\u2026",
-            ["about_ver"] = "Version 0.70 Beta 1 (Build 0.70.0254.20260626.0939)",
+            ["about_ver"] = "Version 0.7.2.0629.20260714.0949 Beta",
             ["about_desc"] = "Strinova game client downloader and version manager.",
             ["about_credit"] = "by Cecilia \u00b7 zrobione dla Tosia \u2665",
             ["about_license"] = "Licensed under PolyForm Noncommercial 1.0",
@@ -151,7 +278,7 @@ namespace StrinowaWPF
         //cn
         static readonly Dictionary<string, string> _cn = new()
         {
-            ["title"] = "Strinowa v0.70 Beta 1",
+            ["title"] = "Strinowa v0.72",
             ["settings"] = "\u8bbe\u7f6e",
             ["about"] = "\u5173\u4e8e",
             ["launcher_theme"] = "\u542f\u52a8\u5668\u4e3b\u9898",
@@ -161,6 +288,8 @@ namespace StrinowaWPF
             ["theme_midnight_sub"] = "\u7eaf\u9ed1",
             ["theme_light"] = "\u6d45\u8272",
             ["theme_light_sub"] = "\u660e\u4eae\u754c\u9762",
+            ["theme_acrylic"] = "\u4e9a\u514b\u529b",
+            ["theme_acrylic_sub"] = "\u6a21\u7cca\u73bb\u7483",
             ["terminal_color"] = "\u7ec8\u7aef\u6587\u5b57\u989c\u8272",
             ["term_note"] = "\u6587\u5b57\u989c\u8272\u968f\u4e3b\u9898\u548c\u7248\u672c\u7c7b\u578b\u53d8\u5316\u3002",
             ["term_a_label"] = "\u81ea\u9002\u5e94 \u767d / \u9ed1",
@@ -180,9 +309,9 @@ namespace StrinowaWPF
             ["apply"] = "\u5e94\u7528",
             ["cancel"] = "\u53d6\u6d88",
             ["ok"] = "\u786e\u5b9a",
-            ["hint"] = "<\u6e38\u620f\u5206\u652f>  <OS|CN|PC|QQ>  <\u7248\u672c>  [-b | -lb]",
+            ["hint"] = "<\u6e38\u620f\u5206\u652f>  <OS|CN|PC>  <\u7248\u672c>  [-b]",
             ["downloading"] = "\u6b63\u5728\u4e0b\u8f7d\u2026",
-            ["about_ver"] = "\u7248\u672c 0.70 Beta 1\uff08\u5185\u90e8\u7248\u672c 0.70.0254.20260626.0939\uff09",
+            ["about_ver"] = "\u7248\u672c 0.7.2.0629.20260714.0949 Beta",
             ["about_desc"] = "\u5361\u62c9\u5f7c\u4e18\u6e38\u620f\u5ba2\u6237\u7aef\u4e0b\u8f7d\u5668\u548c\u7248\u672c\u7ba1\u7406\u5668\u3002",
             ["about_credit"] = "by Cecilia \u00b7 \u4e3a Tosia \u5236\u4f5c \u2665",
             ["about_license"] = "\u6388\u6743\u5e94\u7528 PolyForm \u975e\u5546\u4e1a 1.0 \u8bb8\u53ef",
@@ -212,7 +341,7 @@ namespace StrinowaWPF
         //pl
         static readonly Dictionary<string, string> _pl = new()
         {
-            ["title"] = "Strinowa v0.70 Beta 1",
+            ["title"] = "Strinowa v0.72",
             ["settings"] = "Ustawienia",
             ["about"] = "O programie",
             ["launcher_theme"] = "MOTYW LAUNCHERA",
@@ -222,6 +351,8 @@ namespace StrinowaWPF
             ["theme_midnight_sub"] = "Czysta czer\u0144",
             ["theme_light"] = "Jasny",
             ["theme_light_sub"] = "Jasny interfejs",
+            ["theme_acrylic"] = "Akryl",
+            ["theme_acrylic_sub"] = "Rozmyte szk\u0142o",
             ["terminal_color"] = "KOLOR TEKSTU TERMINALA",
             ["term_note"] = "Kolory tekstu dopasowuj\u0105 si\u0119 do motywu i typu wersji.",
             ["term_a_label"] = "Adaptacyjny Bia\u0142y / Czarny",
@@ -241,9 +372,9 @@ namespace StrinowaWPF
             ["apply"] = "Zastosuj",
             ["cancel"] = "Anuluj",
             ["ok"] = "OK",
-            ["hint"] = "<Ga\u0142\u0105\u017a_Gry>  <OS|CN|PC|QQ>  <wersja>  [-b | -lb]",
+            ["hint"] = "<Ga\u0142\u0105\u017a_Gry>  <OS|CN|PC>  <wersja>  [-b]",
             ["downloading"] = "Pobieranie\u2026",
-            ["about_ver"] = "Wersja 0.70 Beta 1 (Build 0.70.0254.20260626.0939)",
+            ["about_ver"] = "Wersja 0.7.2.0629.20260714.0949 Beta",
             ["about_desc"] = "Pobieracz klienta gry Kalabijau i mened\u017cer wersji.",
             ["about_credit"] = "by Cecilia \u00b7 zrobione dla Tosia \u2665",
             ["about_license"] = "Licencja PolyForm Niekomercyjna 1.0",
@@ -254,7 +385,7 @@ namespace StrinowaWPF
             ["builds"] = "wersji",
             ["removed"] = "Przestarza\u0142y",
             ["pause"] = "Wstrzymaj",
-            ["resume"] = "Wznów",
+            ["resume"] = "Wzn\u00F3w",
             ["locating"] = "Wyszukiwanie wersji\u2026",
             ["identifying"] = "Identyfikacja typ\u00f3w\u2026",
             ["compiling"] = "Kompilowanie listy\u2026",
@@ -278,9 +409,9 @@ namespace StrinowaWPF
         public static bool AcrylicEnabled { get; set; } = false;
         public static double AcrylicOpacity { get; set; } = 0.85;
         public static int SpeedLimitKBs { get; set; } = 51200;
-        public static bool LauncherFormatAsked { get; set; } = false;
         public static bool LauncherDefault7z { get; set; } = true;
         public static bool LauncherDefaultExe { get; set; } = false;
+        public static bool ShowDevkits { get; set; } = false;
     }
 
     public static class AppTheme
@@ -289,22 +420,31 @@ namespace StrinowaWPF
         public static TermColorPreset CurrentTermPreset { get; set; } = TermColorPreset.AdaptiveWhiteBlack;
 
         public static void Apply(MainWindow w) => w.ApplyTheme();
+        public static void ApplyToManifest(Manifest w) => w.ApplyTheme();
 
-        public static void ApplyToAbout(AboutWindow a)
+        public static void ApplyToAbout(About a)
         {
             bool isLight = CurrentTheme == LauncherTheme.Light;
             bool isMidnight = CurrentTheme == LauncherTheme.Midnight;
+            bool isAcrylic = CurrentTheme == LauncherTheme.Acrylic;
 
-            a.RootBorder.Background = isMidnight ? B(0, 0, 0) : isLight ? B(0xEC, 0xEC, 0xF4) : B(0x1A, 0x1A, 0x1F);
-            a.RootBorder.BorderBrush = isLight ? B(0xB0, 0xB0, 0xC8) : B(0x2E, 0x2E, 0x38);
-            a.TitleBarBorder.Background = isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xE8) : B(0x11, 0x11, 0x15);
-            a.TitleText.Foreground = isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
-            a.SepRect.Fill = isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
-            a.AppVersion.Foreground = isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0x88);
-            a.AppDesc.Foreground = isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC);
-            a.AppCredit.Foreground = isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0x88);
-            a.FooterBorder.Background = isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xEC) : B(0x0E, 0x0E, 0x16);
-            a.FooterBorder.BorderBrush = isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
+            a.RootBorder.Background = isAcrylic ? B(0x18, 0x26, 0x26, 0x26) : isMidnight ? B(0, 0, 0) : isLight ? B(0xEC, 0xEC, 0xF4) : B(0x1A, 0x1A, 0x1F);
+            a.RootBorder.BorderBrush = isAcrylic ? Brushes.Transparent : isLight ? B(0xB0, 0xB0, 0xC8) : B(0x2E, 0x2E, 0x38);
+            a.RootBorder.Margin = new Thickness(0);
+            a.RootBorder.BorderThickness = new Thickness(0);
+            a.RootBorder.Effect = null;
+            a.TitleBarBorder.Background = isAcrylic ? B(0x24, 0x30, 0x30, 0x30) : isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xE8) : B(0x11, 0x11, 0x15);
+            a.TitleText.Foreground = isAcrylic ? B(0xF7, 0xFA, 0xFF) : isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
+            a.SepRect.Fill = isAcrylic ? B(0x38, 0xA8, 0xA8, 0xA8) : isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
+            a.AppVersion.Foreground = isAcrylic ? B(0xD0, 0xD0, 0xD0) : isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0x88);
+            a.AppDesc.Foreground = isAcrylic ? B(0xF1, 0xF5, 0xFA) : isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC);
+            a.AppCredit.Foreground = isAcrylic ? B(0xD0, 0xD0, 0xD0) : isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0x88);
+            a.FooterBorder.Background = isAcrylic ? B(0x30, 0x1C, 0x1C, 0x1C) : isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xEC) : B(0x0E, 0x0E, 0x16);
+            a.FooterBorder.BorderBrush = isAcrylic ? B(0x38, 0xA8, 0xA8, 0xA8) : isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
+            a.AppIconGlass.Background = isAcrylic ? B(0x48, 0xE8, 0xE8, 0xE8) : Brushes.Transparent;
+            a.AppIconGlass.BorderBrush = isAcrylic ? B(0xB0, 0xFF, 0xFF, 0xFF) : Brushes.Transparent;
+            a.OkButton.Background = isAcrylic ? B(0xD8, 0xD9, 0x3F, 0x82) : B(0xDC, 0x32, 0x78);
+            AcrylicHelper.ApplyBackdrop(a, isAcrylic, borderlessFullWindow: true);
 
             a.TitleText.Text = Strings.Get("about");
             a.AppVersion.Text = Strings.Get("about_ver");
@@ -316,6 +456,7 @@ namespace StrinowaWPF
         public static SolidColorBrush GetCNBrush() => TC.CN;
 
         static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+        static SolidColorBrush B(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
     }
 
     public class DevkitWaveAnimator
@@ -372,7 +513,6 @@ namespace StrinowaWPF
 
     public class DevkitColorAnimator
     {
-        // Pink palette: #FF004D → #FF0077 → #F03A95 → wave down to #B31741 → #B033A3
         static readonly Color[] _pinkPalette =
         {
             Color.FromRgb(0xFF, 0x00, 0x4D),
@@ -420,30 +560,51 @@ namespace StrinowaWPF
 
     public partial class SettingsWindow : Window
     {
+        readonly MainWindow? _host;
         LauncherTheme _pendingTheme;
         TermColorPreset _pendingTermPreset;
         AppLanguage _pendingLang;
         DevkitWaveAnimator? _waveAnim;
+        readonly List<BitmapImage> _acrylicPreviewBackgrounds = new();
+        DispatcherTimer? _acrylicPreviewTimer;
+        int _acrylicPreviewIndex;
+        bool _previewBackgroundAIsActive = true;
+        int _originalUiScale = 100;
+        bool _scalePreviewReady;
+        bool _settingsApplied;
 
-        public SettingsWindow()
+        public SettingsWindow(MainWindow? host = null)
         {
+            _host = host;
             InitializeComponent();
+            Loaded += (_, _) =>
+            {
+                SyncWindowSettings();
+                UpdateDevkitPreviewVisibility();
+            };
+            PreviewKeyDown += SettingsWindow_PreviewKeyDown;
+            PreviewBorder.SizeChanged += (_, _) => UpdatePreviewClip();
+            Closed += (_, _) =>
+            {
+                _waveAnim?.Stop();
+                _acrylicPreviewTimer?.Stop();
+                if (!_settingsApplied) _host?.ApplyUiScale(_originalUiScale);
+            };
             _pendingTheme = AppTheme.CurrentTheme;
             _pendingTermPreset = AppTheme.CurrentTermPreset;
             _pendingLang = Strings.Lang;
             ClearLogCheck.IsChecked = AppSettings.ClearLogOnFinish;
             SaveBruteforceCheck.IsChecked = AppSettings.SaveBruteforceToFile;
-            SpeedBox.Text = AppSettings.SpeedLimitKBs.ToString();
-            if (Owner is MainWindow mwInit)
+            SpeedBox.Text = AppSettings.SpeedLimitKBs.ToString();            if (_host is MainWindow mwInit)
             {
-                WinWidthBox.Text = ((int)(mwInit.Width - 16)).ToString();
-                WinHeightBox.Text = ((int)(mwInit.Height - 16)).ToString();
+                UiScaleSlider.Value = mwInit.CurrentUiScale;
+                UiScaleValue.Text = $"{mwInit.CurrentUiScale}%";
             }
-            RefreshFmtSelection();
             ApplyWindowTheme();
             RefreshThemeSelection();
             RefreshTermColorSelection();
             RefreshLangSelection();
+            LoadAcrylicPreviewBackgrounds();
             UpdatePreview();
             StartWavePreview();
             ApplyLangToUI();
@@ -452,41 +613,168 @@ namespace StrinowaWPF
         void StartWavePreview()
         {
             _waveAnim?.Stop();
+            if (!AppSettings.ShowDevkits) return;
             _waveAnim = new DevkitWaveAnimator(_pendingTermPreset, PreviewDevkit);
         }
 
+        void UpdateDevkitPreviewVisibility()
+        {
+            PreviewDevkit.Visibility = AppSettings.ShowDevkits ? Visibility.Visible : Visibility.Collapsed;
+            if (AppSettings.ShowDevkits) StartWavePreview();
+            else
+            {
+                _waveAnim?.Stop();
+                _waveAnim = null;
+            }
+        }
+
+        void SettingsWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.D || (Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+            e.Handled = true;
+            _host?.EnableDevkits();
+            UpdateDevkitPreviewVisibility();
+        }
+
+        void UpdatePreviewClip()
+        {
+            if (PreviewCarouselHost.ActualWidth <= 0 || PreviewCarouselHost.ActualHeight <= 0) return;
+            PreviewCarouselHost.Clip = new RectangleGeometry(
+                new Rect(0, 0, PreviewCarouselHost.ActualWidth, PreviewCarouselHost.ActualHeight), 6, 6);
+        }
+
+        void LoadAcrylicPreviewBackgrounds()
+        {
+            foreach (var fileName in new[] { "bg.png", "bg1.png", "bg.jpg" })
+            {
+                try
+                {
+                    var image = new BitmapImage();
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.UriSource = new Uri($"pack://application:,,,/{fileName}", UriKind.Absolute);
+                    image.EndInit();
+                    image.Freeze();
+                    _acrylicPreviewBackgrounds.Add(image);
+                }
+                catch
+                {
+                }
+            }
+
+            if (_acrylicPreviewBackgrounds.Count > 0)
+            {
+                PreviewBackgroundA.Source = _acrylicPreviewBackgrounds[0];
+                _acrylicPreviewIndex = 0;
+                _previewBackgroundAIsActive = true;
+            }
+
+            _acrylicPreviewTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            _acrylicPreviewTimer.Tick += (_, _) => AdvanceAcrylicPreview();
+            _acrylicPreviewTimer.Start();
+        }
+
+        void AdvanceAcrylicPreview()
+        {
+            if (_pendingTheme != LauncherTheme.Acrylic || _acrylicPreviewBackgrounds.Count < 2) return;
+
+            _acrylicPreviewIndex = (_acrylicPreviewIndex + 1) % _acrylicPreviewBackgrounds.Count;
+            var incoming = _previewBackgroundAIsActive ? PreviewBackgroundB : PreviewBackgroundA;
+            var outgoing = _previewBackgroundAIsActive ? PreviewBackgroundA : PreviewBackgroundB;
+            incoming.Source = _acrylicPreviewBackgrounds[_acrylicPreviewIndex];
+            incoming.BeginAnimation(OpacityProperty, new DoubleAnimation(0.82, TimeSpan.FromMilliseconds(650))
+            { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
+            outgoing.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(650))
+            { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
+            _previewBackgroundAIsActive = !_previewBackgroundAIsActive;
+        }
+
+        void UpdateAcrylicPreviewVisibility()
+        {
+            bool show = _pendingTheme == LauncherTheme.Acrylic;
+            PreviewBackdropFallback.Opacity = show ? 1 : 0;
+            PreviewAcrylicTint.Opacity = show ? 1 : 0;
+            PreviewBackgroundA.BeginAnimation(OpacityProperty, null);
+            PreviewBackgroundB.BeginAnimation(OpacityProperty, null);
+
+            if (!show)
+            {
+                PreviewBackgroundA.Opacity = PreviewBackgroundB.Opacity = 0;
+                return;
+            }
+
+            var active = _previewBackgroundAIsActive ? PreviewBackgroundA : PreviewBackgroundB;
+            var inactive = _previewBackgroundAIsActive ? PreviewBackgroundB : PreviewBackgroundA;
+            active.Opacity = _acrylicPreviewBackgrounds.Count > 0 ? 0.82 : 0;
+            inactive.Opacity = 0;
+        }
+
         // this does NOT update the preview pane bc thats UpdatePreview() its below here
+        void SyncWindowSettings()
+        {
+            if (_host is MainWindow owner)
+            {
+                _scalePreviewReady = false;
+                _originalUiScale = owner.CurrentUiScale;
+                UiScaleSlider.Value = owner.CurrentUiScale;
+                UiScaleValue.Text = $"{owner.CurrentUiScale}%";
+                _scalePreviewReady = true;
+            }
+        }
         void ApplyWindowTheme()
         {
             bool isLight = AppTheme.CurrentTheme == LauncherTheme.Light;
             bool isMidnight = AppTheme.CurrentTheme == LauncherTheme.Midnight;
+            bool isAcrylic = AppTheme.CurrentTheme == LauncherTheme.Acrylic;
 
-            var bg = isMidnight ? B(0, 0, 0) : isLight ? B(0xE8, 0xE8, 0xF0) : B(0x1A, 0x1A, 0x1F);
-            var border = isLight ? B(0xB0, 0xB0, 0xC8) : B(0x2E, 0x2E, 0x38);
-            var titleBg = isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xE8) : B(0x11, 0x11, 0x15);
-            var sep = isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
-            var footBg = isMidnight ? B(0, 0, 0) : isLight ? B(0xF5, 0xF5, 0xFF) : B(0x0E, 0x0E, 0x16);
-            var textFg = isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
-            var subFg = isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0x88);
-            var tileBg = isMidnight ? B(0x08, 0x08, 0x08) : isLight ? B(0xE0, 0xE0, 0xEC) : B(0x13, 0x13, 0x1A);
-            var pink = B(0xDC, 0x32, 0x78);
+            var bg = isAcrylic ? B(0x20, 0x26, 0x26, 0x26) : isMidnight ? B(0, 0, 0) : isLight ? B(0xE8, 0xE8, 0xF0) : B(0x1A, 0x1A, 0x1F);
+            var border = isAcrylic ? Brushes.Transparent : isLight ? B(0xB0, 0xB0, 0xC8) : B(0x2E, 0x2E, 0x38);
+            var titleBg = isAcrylic ? B(0x2C, 0x30, 0x30, 0x30) : isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xE8) : B(0x11, 0x11, 0x15);
+            var sep = isAcrylic ? B(0x38, 0xA8, 0xA8, 0xA8) : isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
+            var footBg = isAcrylic ? B(0x30, 0x1C, 0x1C, 0x1C) : isMidnight ? B(0, 0, 0) : isLight ? B(0xF5, 0xF5, 0xFF) : B(0x0E, 0x0E, 0x16);
+            var textFg = isAcrylic ? B(0xF7, 0xFA, 0xFF) : isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
+            var subFg = isAcrylic ? B(0xD0, 0xD0, 0xD0) : isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0x88);
+            var tileBg = isAcrylic ? B(0x30, 0x3A, 0x3A, 0x3A) : isMidnight ? B(0x08, 0x08, 0x08) : isLight ? B(0xE0, 0xE0, 0xEC) : B(0x13, 0x13, 0x1A);
+            var pink = isAcrylic ? B(0xFF, 0x78, 0xAE) : B(0xDC, 0x32, 0x78);
+            var accent = AppTheme.CurrentTermPreset == TermColorPreset.PinkAccent ? pink : (isLight ? B(0x22, 0x22, 0x30) : B(0xF0, 0xF0, 0xF0));
+
+            Resources["SettingsControlBrush"] = isAcrylic ? B(0x30, 0x3A, 0x3A, 0x3A) : tileBg;
+            Resources["SettingsControlHoverBrush"] = isAcrylic ? B(0x48, 0x58, 0x58, 0x58) : isLight ? B(0xC8, 0xC8, 0xD8) : B(0x33, 0x33, 0x41);
+            Resources["SettingsControlPressedBrush"] = isAcrylic ? B(0x58, 0x2B, 0x2B, 0x2B) : isLight ? B(0xB8, 0xB8, 0xCA) : B(0x1C, 0x1C, 0x28);
+            Resources["SettingsBorderBrush"] = border;
+            Resources["SettingsTextBrush"] = textFg;
+            Resources["SettingsMutedBrush"] = subFg;
+            Resources["SettingsAccentBrush"] = accent;
+            Resources["SettingsTrackBrush"] = isAcrylic ? B(0x70, 0x78, 0x78, 0x82)
+                : isLight ? B(0xB8, 0xB8, 0xC8)
+                : isMidnight ? B(0x28, 0x28, 0x32)
+                : B(0x2E, 0x2E, 0x38);
+            UiScaleSlider.Foreground = accent;
+            SettingsScroll.Foreground = AppTheme.CurrentTermPreset == TermColorPreset.PinkAccent ? pink : (isLight ? B(0x55, 0x55, 0x77) : B(0x88, 0x88, 0xA0));
 
             AB(RootBorder, bg.Color, border.Color);
+            RootBorder.Margin = new Thickness(0);
+            RootBorder.BorderThickness = new Thickness(0);
+            RootBorder.Effect = null;
             AB(TitleBarBorder, titleBg.Color);
             AT(TitleText, textFg.Color);
             AF(SepRect, sep.Color);
             AB(FooterBorder, footBg.Color, sep.Color);
-            ScrollContent.Background = bg;
+            ScrollContent.Background = isAcrylic ? Brushes.Transparent : bg;
+            AcrylicHelper.ApplyBackdrop(this, isAcrylic);
 
-            AT(SectionTheme, pink.Color);
-            AT(SectionTerminal, pink.Color);
-            AT(SectionPreview, pink.Color);
-            AT(SectionLang, pink.Color);
-            AT(SectionOptions, pink.Color);
+            AT(SectionTheme, accent.Color);
+            AT(SectionTerminal, accent.Color);
+            AT(SectionPreview, accent.Color);
+            AT(SectionLang, accent.Color);
+            AT(SectionOptions, accent.Color);
 
-            AT(TerminalColorNote, (isLight ? B(0x55, 0x55, 0x77) : B(0x66, 0x66, 0x88)).Color);
-            AT(ClearLogCheck, (isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC)).Color);
-            AT(SaveBruteforceCheck, (isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC)).Color);
+            AT(TerminalColorNote, (isAcrylic ? subFg : isLight ? B(0x55, 0x55, 0x77) : B(0x66, 0x66, 0x88)).Color);
+            AT(ClearLogCheck, textFg.Color);
+            AT(SaveBruteforceCheck, textFg.Color);
+            ApplyBtn.Background = isAcrylic ? B(0xD8, 0xD9, 0x3F, 0x82) : B(0xDC, 0x32, 0x78);
+            CancelBtn.Background = isAcrylic ? B(0x40, 0x42, 0x42, 0x42) : tileBg;
+            CancelBtn.Foreground = textFg;
 
             AB(TermColorAInner, tileBg.Color);
             AB(TermColorBInner, tileBg.Color);
@@ -507,10 +795,13 @@ namespace StrinowaWPF
         {
             bool isLight = _pendingTheme == LauncherTheme.Light;
             bool isMidnight = _pendingTheme == LauncherTheme.Midnight;
+            bool isAcrylic = _pendingTheme == LauncherTheme.Acrylic;
 
-            var prevBg = isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xEC) : B(0x0E, 0x0E, 0x16);
-            var border = isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
+            var prevBg = isAcrylic ? Brushes.Transparent : isMidnight ? B(0, 0, 0) : isLight ? B(0xD8, 0xD8, 0xEC) : B(0x0E, 0x0E, 0x16);
+            var border = isAcrylic ? Brushes.Transparent : isLight ? B(0xB0, 0xB0, 0xC8) : B(0x22, 0x22, 0x30);
             AB(PreviewBorder, prevBg.Color, border.Color);
+            PreviewBorder.BorderThickness = isAcrylic ? new Thickness(0) : new Thickness(1);
+            UpdateAcrylicPreviewVisibility();
 
             Color cT1, cT2, cT3, cDeprecated;
 
@@ -521,6 +812,13 @@ namespace StrinowaWPF
                 cT2 = C(0xFF, 0x00, 0x77);
                 cT3 = C(0xF0, 0x3A, 0x95);
                 cDeprecated = C(0x61, 0x0E, 0x60);
+            }
+            else if (isAcrylic)
+            {
+                cT1 = C(0xF7, 0xFA, 0xFF);
+                cT2 = C(0xD7, 0xE0, 0xE9);
+                cT3 = C(0xB6, 0xC2, 0xD0);
+                cDeprecated = C(0x7E, 0x8B, 0x9A);
             }
             else if (isLight)
             {
@@ -564,6 +862,8 @@ namespace StrinowaWPF
             ThemeDarkSub.Text = Strings.Get("theme_dark_sub");
             ThemeMidnightLabel.Text = Strings.Get("theme_midnight");
             ThemeMidnightSub.Text = Strings.Get("theme_midnight_sub");
+            ThemeAcrylicLabel.Text = Strings.Get("theme_acrylic");
+            ThemeAcrylicSub.Text = Strings.Get("theme_acrylic_sub");
             ThemeLightLabel.Text = Strings.Get("theme_light");
             ThemeLightSub.Text = Strings.Get("theme_light_sub");
             TermColorALabel.Text = Strings.Get("term_a_label");
@@ -589,11 +889,12 @@ namespace StrinowaWPF
         void RefreshThemeSelection()
         {
             var dim = B(0x2E, 0x2E, 0x38); var accent = B(0xDC, 0x32, 0x78);
-            ThemeDark.BorderBrush = ThemeMidnight.BorderBrush = ThemeLight.BorderBrush = dim;
+            ThemeDark.BorderBrush = ThemeMidnight.BorderBrush = ThemeAcrylic.BorderBrush = ThemeLight.BorderBrush = dim;
             switch (_pendingTheme)
             {
                 case LauncherTheme.Dark: ThemeDark.BorderBrush = accent; break;
                 case LauncherTheme.Midnight: ThemeMidnight.BorderBrush = accent; break;
+                case LauncherTheme.Acrylic: ThemeAcrylic.BorderBrush = accent; break;
                 case LauncherTheme.Light: ThemeLight.BorderBrush = accent; break;
             }
         }
@@ -640,6 +941,9 @@ namespace StrinowaWPF
 
         void ThemeMidnight_Click(object s, MouseButtonEventArgs e)
         { PulseBtn(ThemeMidnight); _pendingTheme = LauncherTheme.Midnight; RefreshThemeSelection(); UpdatePreview(); }
+
+        void ThemeAcrylic_Click(object s, MouseButtonEventArgs e)
+        { PulseBtn(ThemeAcrylic); _pendingTheme = LauncherTheme.Acrylic; RefreshThemeSelection(); UpdatePreview(); }
 
         void ThemeLight_Click(object s, MouseButtonEventArgs e)
         { PulseBtn(ThemeLight); _pendingTheme = LauncherTheme.Light; RefreshThemeSelection(); UpdatePreview(); }
@@ -692,61 +996,52 @@ namespace StrinowaWPF
             AppSettings.SaveBruteforceToFile = SaveBruteforceCheck.IsChecked == true;
             if (int.TryParse(SpeedBox.Text.Trim(), out int spd) && spd >= 64)
                 AppSettings.SpeedLimitKBs = spd;
-            if (int.TryParse(WinWidthBox.Text.Trim(), out int ww) && ww >= 560 &&
-                int.TryParse(WinHeightBox.Text.Trim(), out int wh) && wh >= 380 &&
-                Owner is MainWindow mwSize)
+            if (_host is MainWindow mwSize)
             {
-                mwSize.Width = ww + 16;
-                mwSize.Height = wh + 16;
+                if (SizePresetBox.SelectedItem is ComboBoxItem preset)
+                {
+                    var dimensions = (preset.Tag?.ToString() ?? "900,560").Split(',');
+                    if (dimensions.Length == 2 && int.TryParse(dimensions[0], out int ww) && int.TryParse(dimensions[1], out int wh))
+                        mwSize.ApplyWindowPreset(ww, wh);
+                }
+                mwSize.ApplyUiScale((int)UiScaleSlider.Value);
             }
 
-            if (Owner is MainWindow mw)
-                mw.ApplyTheme();
-
+            _settingsApplied = true;
             _waveAnim?.Stop();
+            _acrylicPreviewTimer?.Stop();
             Close();
         }
 
-        void FmtAsk_Click(object s, MouseButtonEventArgs e)
+        void UiScaleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            AppSettings.LauncherFormatAsked = false;
-            RefreshFmtSelection();
-        }
-        void Fmt7z_Click(object s, MouseButtonEventArgs e)
-        {
-            AppSettings.LauncherFormatAsked = true;
-            AppSettings.LauncherDefault7z = true;
-            AppSettings.LauncherDefaultExe = false;
-            RefreshFmtSelection();
-        }
-        void FmtExe_Click(object s, MouseButtonEventArgs e)
-        {
-            AppSettings.LauncherFormatAsked = true;
-            AppSettings.LauncherDefault7z = false;
-            AppSettings.LauncherDefaultExe = true;
-            RefreshFmtSelection();
-        }
+            if (UiScaleValue == null) return;
+            UiScaleValue.Text = $"{(int)e.NewValue}%";
+            var scale = new ScaleTransform(1, 1);
+            UiScaleValue.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+            UiScaleValue.RenderTransform = scale;
+            var pulse = new DoubleAnimation(1.16, 1.0, TimeSpan.FromMilliseconds(180)) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } };
+            scale.ScaleX = 1.16; scale.ScaleY = 1.16;
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, pulse);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, pulse);
+            var sliderPulse = new DoubleAnimation(0.90, 1.0, TimeSpan.FromMilliseconds(140))
+            { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } };
+            UiScaleSlider.BeginAnimation(OpacityProperty, sliderPulse);
 
-        void RefreshFmtSelection()
-        {
-            var dim = B(0x2E, 0x2E, 0x38);
-            var accent = B(0xDC, 0x32, 0x78);
-            FmtAsk.BorderBrush = dim;
-            Fmt7z.BorderBrush = dim;
-            FmtExe.BorderBrush = dim;
-            if (!AppSettings.LauncherFormatAsked) FmtAsk.BorderBrush = accent;
-            else if (AppSettings.LauncherDefault7z && !AppSettings.LauncherDefaultExe) Fmt7z.BorderBrush = accent;
-            else if (!AppSettings.LauncherDefault7z && AppSettings.LauncherDefaultExe) FmtExe.BorderBrush = accent;
+            if (_scalePreviewReady) _host?.ApplyUiScale((int)e.NewValue);
         }
-
-        void CloseBtn_Click(object s, RoutedEventArgs e) { _waveAnim?.Stop(); Close(); }
+        void CloseBtn_Click(object s, RoutedEventArgs e)
+        {
+            _waveAnim?.Stop();
+            _acrylicPreviewTimer?.Stop();
+            Close();
+        }
 
         void Window_MouseLeftButtonDown(object s, MouseButtonEventArgs e)
         {
             if (e.ButtonState == MouseButtonState.Pressed) DragMove();
         }
 
-        // Helpers for animated color transitions on chrome elements
         void AB(Border el, Color bg, Color? bd = null)
         {
             AnimBrush(el, Border.BackgroundProperty, bg);
@@ -754,28 +1049,39 @@ namespace StrinowaWPF
         }
         void AF(Rectangle el, Color to)
         {
-            if (el.Fill is SolidColorBrush b) b.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
-            else el.Fill = new SolidColorBrush(to);
+            var brush = MutableBrush(el.Fill, to);
+            el.Fill = brush;
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
         }
         void AT(TextBlock el, Color to)
         {
-            if (el.Foreground is SolidColorBrush b) b.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
-            else el.Foreground = new SolidColorBrush(to);
+            var brush = MutableBrush(el.Foreground, to);
+            el.Foreground = brush;
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
         }
         void AT(ContentControl el, Color to)
         {
-            if (el.Foreground is SolidColorBrush b) b.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
-            else el.Foreground = new SolidColorBrush(to);
+            var brush = MutableBrush(el.Foreground, to);
+            el.Foreground = brush;
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
         }
         void AnimBrush(Border el, DependencyProperty prop, Color to)
         {
-            if (el.GetValue(prop) is SolidColorBrush b) b.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
-            else el.SetValue(prop, new SolidColorBrush(to));
+            var brush = MutableBrush(el.GetValue(prop) as Brush, to);
+            el.SetValue(prop, brush);
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, CA(to));
+        }
+        static SolidColorBrush MutableBrush(Brush? source, Color fallback)
+        {
+            return source is SolidColorBrush solid
+                ? new SolidColorBrush(solid.Color) { Opacity = solid.Opacity }
+                : new SolidColorBrush(fallback);
         }
         static ColorAnimation CA(Color to) => new(to, TimeSpan.FromMilliseconds(220))
         { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
 
         static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+        static SolidColorBrush B(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
         static Color C(byte r, byte g, byte b) => Color.FromRgb(r, g, b);
     }
 }

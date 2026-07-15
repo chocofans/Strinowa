@@ -1,17 +1,17 @@
-<Window x:Class="StrinowaWPF.MainWindow"
+﻿<Window x:Class="StrinowaWPF.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Strinova v0.70 Beta 1"
+        Title="Strinowa v0.72"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
         ResizeMode="CanResize"
-        MinWidth="560"
+        MinWidth="760"
         MinHeight="380"
         Loaded="Window_Loaded"
         MouseLeftButtonDown="Window_MouseLeftButtonDown"
         SizeChanged="Window_SizeChanged"
-        Icon="strinowa.ico">
+        Icon="icon.ico" PreviewKeyDown="Window_PreviewKeyDown" PreviewKeyUp="Window_PreviewKeyUp">
 
     <Window.Resources>
 
@@ -29,11 +29,15 @@
         <SolidColorBrush x:Key="ChevronBrush"    Color="#DC3278"/>
         <SolidColorBrush x:Key="InputBgBrush"    Color="#13131A"/>
         <SolidColorBrush x:Key="ScrollBarBrush"  Color="#2A2A35"/>
+        <SolidColorBrush x:Key="ControlSurfaceBrush" Color="#24242D"/>
+        <SolidColorBrush x:Key="ControlHoverBrush" Color="#333341"/>
+        <SolidColorBrush x:Key="ControlPressedBrush" Color="#4E4E5E"/>
+        <SolidColorBrush x:Key="ControlTextBrush" Color="#F0F0F0"/>
         <Style x:Key="TitleCloseBtn" TargetType="Button">
             <Setter Property="Width"  Value="46"/>
             <Setter Property="Height" Value="34"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="Foreground" Value="{DynamicResource ControlTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
             <Setter Property="FontSize" Value="10"/>
@@ -67,7 +71,7 @@
             <Setter Property="Width"  Value="46"/>
             <Setter Property="Height" Value="34"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="Foreground" Value="{DynamicResource ControlTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
             <Setter Property="FontSize" Value="10"/>
@@ -86,11 +90,11 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd"   Property="Background" Value="#323240"/>
+                                <Setter TargetName="bd"   Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
                                 <Setter TargetName="icon" Property="Foreground" Value="White"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#28283A"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlPressedBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -114,10 +118,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#252532"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#1C1C28"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlPressedBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -130,7 +134,7 @@
             <Setter Property="Width"  Value="28"/>
             <Setter Property="Height" Value="28"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#888888"/>
+            <Setter Property="Foreground" Value="{DynamicResource ControlTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
             <Setter Property="FontSize" Value="13"/>
@@ -150,11 +154,11 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd"   Property="Background" Value="#252532"/>
+                                <Setter TargetName="bd"   Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
                                 <Setter TargetName="icon" Property="Foreground" Value="#DC3278"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#1C1C28"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlPressedBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -183,15 +187,106 @@
             </Setter>
         </Style>
 
+        <Style x:Key="BruteInput" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource ControlSurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ControlTextBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="CaretBrush" Value="#DC3278"/>
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Courier New"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="false"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Disabled"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BruteBtn" TargetType="Button">
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="MinWidth" Value="36"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Background" Value="{DynamicResource ControlSurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ControlTextBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Courier New"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlPressedBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MultiChoiceRow" TargetType="ToggleButton">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="Background" Value="{DynamicResource ControlSurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ControlTextBrush}"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="RowBorder" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="RowBorder" Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="RowBorder" Property="BorderBrush" Value="#DC3278"/>
+                                <Setter TargetName="RowBorder" Property="Background" Value="{DynamicResource ControlPressedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="RowBorder" Property="Opacity" Value="0.76"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="RowBorder" Property="Opacity" Value="0.42"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="ThemedScrollBar" TargetType="ScrollBar">
             <Setter Property="Width" Value="6"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Grid>
+                        <Grid Background="Transparent">
                             <Track x:Name="PART_Track" IsDirectionReversed="True">
                                 <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Height="0"/>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Background="Transparent" BorderThickness="0" Opacity="0" Height="0"/>
                                 </Track.DecreaseRepeatButton>
                                 <Track.Thumb>
                                     <Thumb>
@@ -205,7 +300,7 @@
                                     </Thumb>
                                 </Track.Thumb>
                                 <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Height="0"/>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Background="Transparent" BorderThickness="0" Opacity="0" Height="0"/>
                                 </Track.IncreaseRepeatButton>
                             </Track>
                         </Grid>
@@ -232,15 +327,10 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="34"/>
-                <!-- titlebar -->
                 <RowDefinition Height="1"/>
-                <!-- separator -->
                 <RowDefinition Height="*"/>
-                <!-- terminal -->
                 <RowDefinition Height="Auto"/>
-                <!-- download bar -->
                 <RowDefinition Height="Auto"/>
-                <!-- input row -->
             </Grid.RowDefinitions>
 
             <Border x:Name="TitleBarBorder"
@@ -263,15 +353,18 @@
                         <Button Style="{StaticResource Strinowa}"
             Click="LogoBtn_Click"
             Margin="0,0,5,0">
-                            <Image Source="strinowa.ico"
-               Width="18"
-               Height="18"
-               RenderOptions.BitmapScalingMode="HighQuality"
-               VerticalAlignment="Center"/>
+                            <Border x:Name="LogoGlass" Width="22" Height="22" CornerRadius="6"
+                                    Background="Transparent" BorderBrush="Transparent" BorderThickness="1" Padding="2">
+                                <Image Source="icon.ico"
+                   Width="16"
+                   Height="16"
+                   RenderOptions.BitmapScalingMode="HighQuality"
+                   VerticalAlignment="Center"/>
+                            </Border>
                         </Button>
                         <!-- you have to make sure to Quick Replace all version references in the project. To prevent et -->
                         <TextBlock x:Name="TitleVersionText"
-               Text="Strinova v0.70 Beta 1" 
+               Text="Strinowa v0.72" 
                FontFamily="Segoe UI Variable Display, Segoe UI"
                FontSize="13"
                FontWeight="SemiBold"
@@ -283,7 +376,6 @@
             Content="&#xE713;"
             Click="SettingsBtn_Click"/>
 
-                        <!-- ? report bug button -->
                         <Button Style="{StaticResource TitleSettingsBtn}"
             x:Name="ReportBugBtn"
             Content="&#xE9CE;"
@@ -334,11 +426,11 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="0,0,0,6">
+                    <Grid x:Name="DlHeaderGrid" Grid.Row="0" Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -349,15 +441,16 @@
                                    FontFamily="Cascadia Mono, Consolas, Courier New"
                                    FontSize="11.5"
                                    Foreground="#DC3278"
-                                   Text="Downloading…"/>
+                                   VerticalAlignment="Center"
+                                   Text="Downloading&#x2026;"/>
                         <TextBlock x:Name="DlStats"
                                    Grid.Column="1"
                                    FontFamily="Cascadia Mono, Consolas, Courier New"
                                    FontSize="11.5"
                                    Foreground="#888888"
                                    HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
                                    Margin="0,0,8,0"/>
-                        <!-- Pause/Resume button -->
                         <Button x:Name="PauseBtn"
                                 Grid.Column="2"
                                 Content="&#xE769;"
@@ -382,9 +475,239 @@
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd"   Property="Background" Value="#252532"/>
+                                            <Setter TargetName="bd"   Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
                                             <Setter TargetName="icon" Property="Foreground" Value="#DC3278"/>
                                         </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="DownloadCancelBtn" Grid.Column="2"
+                                Content="Cancel" Visibility="Collapsed"
+                                Width="68" Height="26" Margin="0,0,112,0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Background="#3A3A42" Foreground="#D0D0D5" BorderThickness="0"
+                                FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="11"
+                                Cursor="Hand" Click="DownloadCancelBtn_Click">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="CancelBorder" Background="{TemplateBinding Background}" CornerRadius="6">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CancelBorder" Property="Background" Value="#50505A"/></Trigger>
+                                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="CancelBorder" Property="Opacity" Value="0.70"/></Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="DownloadConfirmBtn" Grid.Column="2"
+                                Content="Download" Visibility="Collapsed"
+                                MinWidth="104" Height="30" Padding="16,0"
+                                Background="#DC3278" Foreground="White" BorderThickness="0"
+                                FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="12"
+                                FontWeight="SemiBold" Cursor="Hand"
+                                Click="DownloadConfirmBtn_Click">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="ConfirmBorder" Background="{TemplateBinding Background}" CornerRadius="7">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ConfirmBorder" Property="Opacity" Value="0.84"/></Trigger>
+                                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="ConfirmBorder" Property="Opacity" Value="0.66"/></Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <StackPanel x:Name="DownloadCompletionActions" Grid.Column="2"
+                                    Orientation="Horizontal" Visibility="Collapsed">
+                            <Button x:Name="DownloadCompleteCloseBtn" Content="Close"
+                                    MinWidth="62" Height="28" Padding="12,0" Margin="0,0,8,0"
+                                    Background="#3A3A42" Foreground="#D0D0D5" BorderThickness="0"
+                                    FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="11"
+                                    Cursor="Hand" Click="DownloadCompleteCloseBtn_Click">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="CompletionCloseBorder" Background="{TemplateBinding Background}" CornerRadius="7">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CompletionCloseBorder" Property="Background" Value="#50505A"/></Trigger>
+                                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="CompletionCloseBorder" Property="Opacity" Value="0.70"/></Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Button x:Name="DownloadOpenFolderBtn" Content="Open Folder"
+                                    MinWidth="104" Height="28" Padding="16,0"
+                                    Background="#DC3278" Foreground="White" BorderThickness="0"
+                                    FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="11"
+                                    FontWeight="SemiBold" Cursor="Hand" Click="DownloadOpenFolderBtn_Click">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="CompletionOpenBorder" Background="{TemplateBinding Background}" CornerRadius="7">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CompletionOpenBorder" Property="Opacity" Value="0.84"/></Trigger>
+                                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="CompletionOpenBorder" Property="Opacity" Value="0.66"/></Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border x:Name="MultiDownloadPanel" Grid.Row="1" Visibility="Collapsed"
+                            Background="{DynamicResource ControlSurfaceBrush}" CornerRadius="8"
+                            Padding="10" Margin="0,2,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="2,0,2,7">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Choose branches" FontFamily="Cascadia Mono, Consolas, Courier New"
+                                           FontSize="11" FontWeight="Bold" Foreground="{DynamicResource ControlTextBrush}"/>
+                                <TextBlock x:Name="MultiSelectionCount" Grid.Column="1"
+                                           FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="10.5"
+                                           Foreground="#999999"/>
+                            </Grid>
+                            <ScrollViewer Grid.Row="1" MaxHeight="304"
+                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                          Padding="0,0,5,0">
+                                <StackPanel x:Name="MultiChoiceRows"/>
+                            </ScrollViewer>
+                            <Grid Grid.Row="2" Margin="2,4,2,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Style="{StaticResource BruteBtn}" Content="Select all"
+                                        MinWidth="82" Margin="0,0,7,0" Click="MultiSelectAll_Click"/>
+                                <Button Grid.Column="1" Style="{StaticResource BruteBtn}" Content="Clear"
+                                        MinWidth="56" Click="MultiClear_Click"/>
+                                <Button Grid.Column="3" Style="{StaticResource BruteBtn}" Content="Cancel"
+                                        MinWidth="74" Margin="0,0,8,0" Click="MultiCancel_Click"/>
+                                <Button x:Name="MultiDownloadBtn" Grid.Column="4" Style="{StaticResource BruteBtn}"
+                                        Content="Download selected" MinWidth="140" Height="26"
+                                        Background="#DC3278" Foreground="White" Click="MultiDownload_Click"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <Grid x:Name="LauncherFormatPanel" Grid.Row="1"
+                          Margin="0,4,0,0" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Download format"
+                                   Margin="0,0,10,0" VerticalAlignment="Center"
+                                   FontFamily="Cascadia Mono, Consolas, Courier New"
+                                   FontSize="11" Foreground="#888888"/>
+                        <ToggleButton x:Name="Launcher7zToggle" Grid.Column="1" Content="7z"
+                                      Width="64" Height="28" Margin="0,0,7,0"
+                                      Cursor="Hand" Click="LauncherFormatToggle_Click">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="ToggleBorder" CornerRadius="6"
+                                            Background="{DynamicResource ControlSurfaceBrush}"
+                                            BorderBrush="#484852" BorderThickness="1.5">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                          TextElement.FontFamily="Cascadia Mono, Consolas, Courier New"
+                                                          TextElement.FontSize="11" TextElement.Foreground="#B8B8C2"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="ToggleBorder" Property="Background" Value="#3A1828"/>
+                                            <Setter TargetName="ToggleBorder" Property="BorderBrush" Value="#DC3278"/>
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="ToggleBorder" Property="BorderBrush" Value="#E95B96"/>
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="ToggleBorder" Property="Opacity" Value="0.35"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ToggleButton x:Name="LauncherExeToggle" Grid.Column="2" Content="EXE"
+                                      Width="64" Height="28" Cursor="Hand"
+                                      Click="LauncherFormatToggle_Click">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="ToggleBorder" CornerRadius="6"
+                                            Background="{DynamicResource ControlSurfaceBrush}"
+                                            BorderBrush="#484852" BorderThickness="1.5">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                          TextElement.FontFamily="Cascadia Mono, Consolas, Courier New"
+                                                          TextElement.FontSize="11" TextElement.Foreground="#B8B8C2"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="ToggleBorder" Property="Background" Value="#3A1828"/>
+                                            <Setter TargetName="ToggleBorder" Property="BorderBrush" Value="#DC3278"/>
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="ToggleBorder" Property="BorderBrush" Value="#E95B96"/>
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="ToggleBorder" Property="Opacity" Value="0.35"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Button x:Name="LauncherDownloadCancelBtn" Grid.Column="4"
+                                Content="Cancel" Visibility="Collapsed"
+                                Width="68" Height="26" Margin="0,0,8,0"
+                                Background="#3A3A42" Foreground="#D0D0D5" BorderThickness="0"
+                                FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="11"
+                                Cursor="Hand" VerticalAlignment="Center"
+                                Click="DownloadCancelBtn_Click">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="CancelBorder" Background="{TemplateBinding Background}" CornerRadius="6">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CancelBorder" Property="Background" Value="#50505A"/></Trigger>
+                                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="CancelBorder" Property="Opacity" Value="0.70"/></Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="LauncherDownloadConfirmBtn" Grid.Column="5"
+                                Content="Download" Visibility="Collapsed"
+                                MinWidth="104" Height="30" Padding="16,0"
+                                Background="#DC3278" Foreground="White" BorderThickness="0"
+                                FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="12"
+                                FontWeight="SemiBold" Cursor="Hand"
+                                VerticalAlignment="Center"
+                                Click="DownloadConfirmBtn_Click">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="ConfirmBorder" Background="{TemplateBinding Background}" CornerRadius="7">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ConfirmBorder" Property="Opacity" Value="0.84"/></Trigger>
+                                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="ConfirmBorder" Property="Opacity" Value="0.66"/></Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
@@ -406,7 +729,7 @@
                         </Border>
                     </Border>
 
-                    <Grid Grid.Row="2" Margin="0,6,0,0">
+                    <Grid x:Name="DlFooterGrid" Grid.Row="2" Margin="0,6,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -431,40 +754,140 @@
                     Background="#13131A"
                     BorderBrush="#222230" BorderThickness="0,1,0,0"
                     CornerRadius="0,0,10,10"
-                    Padding="14,0,14,0" Height="40">
+                    Padding="10,0,8,0">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="0"/>
+                        <RowDefinition Height="32"/>
+                    </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Column="0"
-                               x:Name="ChevronBlock"
-                               Text=">"
-                               Foreground="{StaticResource ChevronBrush}"
-                               FontFamily="Cascadia Mono, Consolas, Courier New"
-                               FontSize="13" FontWeight="Bold"
-                               VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
+                    <Grid x:Name="AdvancedBrutePanel" Grid.Row="0" VerticalAlignment="Center" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="104"/>
+                            <ColumnDefinition Width="116"/>
+                            <ColumnDefinition Width="132"/>
+                            <ColumnDefinition Width="102"/>
+                            <ColumnDefinition Width="102"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="84"/>
+                            <ColumnDefinition Width="84"/>
+                        </Grid.ColumnDefinitions>
 
-                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="Bruteforce tool" Foreground="{DynamicResource ControlTextBrush}"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New"
+                                       FontSize="11" FontWeight="Bold"/>
+                            <TextBlock Text="v1.11" Foreground="#999999"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New"
+                                       FontSize="11"/>
+                        </StackPanel>
 
-                        <TextBlock x:Name="InputHint"
-                                   Text="&lt;Game_Branch&gt;  &lt;OS|CN|PC|QQ&gt;  &lt;version&gt;  [-b | -lb]"
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <TextBlock Text="Versions:" Foreground="#999999"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="11"/>
+                            <TextBox x:Name="BruteStartBox" Style="{StaticResource BruteInput}" Height="20"
+                                     Text="0.7.0.9999" Margin="0,0,0,3"/>
+                            <TextBox x:Name="BruteEndBox" Style="{StaticResource BruteInput}" Height="20"
+                                     Text="0.7.0.0000"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <TextBlock Text="Channel:" Foreground="#999999"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="11"/>
+                            <TextBox x:Name="BruteChannelBox" Style="{StaticResource BruteInput}" Height="20"
+                                     Text="Game_Dev2" Margin="0,0,0,3"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="BruteOsBtn" Style="{StaticResource BruteBtn}" Content="OS"
+                                        Click="BruteSource_Click" Tag="os" Margin="0,0,4,0"/>
+                                <Button x:Name="BruteCnBtn" Style="{StaticResource BruteBtn}" Content="CN"
+                                        Click="BruteSource_Click" Tag="cn" Margin="0,0,4,0"/>
+                                <Button x:Name="BrutePcBtn" Style="{StaticResource BruteBtn}" Content="PC"
+                                        Click="BruteSource_Click" Tag="pc"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="3" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <TextBlock Text="Config" Foreground="#999999"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="11"/>
+                            <Button x:Name="BruteLauncherBtn" Style="{StaticResource BruteBtn}" Content="Launcher"
+                                    Click="BruteMode_Click" Tag="launcher" Margin="0,0,0,3"/>
+                            <Button x:Name="BruteGameBtn" Style="{StaticResource BruteBtn}" Content="Game"
+                                    Click="BruteMode_Click" Tag="game"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="4" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <TextBlock Text="Results" Foreground="#999999"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="11"/>
+                            <Button x:Name="BruteTxtBtn" Style="{StaticResource BruteBtn}" Content="Save to TXT"
+                                    Click="BruteResult_Click" Tag="txt"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="6" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,6,0">
+                            <Button x:Name="BruteCancelBtn" Style="{StaticResource BruteBtn}" Content="Cancel"
+                                    Click="BruteCancel_Click" Width="84"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="7" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                            <Button x:Name="BruteStartBtn" Style="{StaticResource BruteBtn}" Content="Start"
+                                    Click="BruteStart_Click" Width="84"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Grid.Row="1" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   x:Name="ChevronBlock"
+                                   Text=">"
+                                   Foreground="{StaticResource ChevronBrush}"
                                    FontFamily="Cascadia Mono, Consolas, Courier New"
-                                   FontSize="13"
-                                   Foreground="#404055"
+                                   FontSize="13" FontWeight="Bold"
                                    VerticalAlignment="Center"
-                                   IsHitTestVisible="False"/>
-                        <TextBox x:Name="InputBox"
-                                 Style="{StaticResource TerminalInput}"
-                                 KeyDown="InputBox_KeyDown"
-                                 TextChanged="InputBox_TextChanged"
-                                 Background="Transparent"/>
+                                   Margin="0,0,8,0"/>
+
+                        <Grid Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="InputHint"
+                                       Text="&lt;Game_Branch&gt;  &lt;OS|CN|PC&gt;  &lt;version&gt;  [-b]"
+                                       FontFamily="Cascadia Mono, Consolas, Courier New"
+                                       FontSize="13"
+                                       Foreground="#404055"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"/>
+                            <TextBox x:Name="InputBox"
+                                     Style="{StaticResource TerminalInput}"
+                                     KeyDown="InputBox_KeyDown"
+                                     TextChanged="InputBox_TextChanged"
+                                     Background="Transparent"/>
+                        </Grid>
                     </Grid>
                 </Grid>
+            </Border>
+
+            <Border x:Name="DebugOverlay" Grid.Row="0" Grid.RowSpan="5"
+                    Panel.ZIndex="1000" Visibility="Collapsed" IsHitTestVisible="False"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="12,46,12,12" Padding="12,9" MaxWidth="540" MaxHeight="460"
+                    CornerRadius="8" Background="#D8101014" BorderBrush="#B8DC3278" BorderThickness="1">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <TextBlock x:Name="DebugText" Foreground="#F2F2F2"
+                               FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="10.5"
+                               TextWrapping="Wrap"/>
+                </ScrollViewer>
+            </Border>
+
+            <Border x:Name="ClipboardToast" Grid.Row="0" Grid.RowSpan="5"
+                    Panel.ZIndex="1100" Visibility="Collapsed" IsHitTestVisible="False"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="16" Padding="14,8" CornerRadius="8" MaxWidth="620"
+                    Background="#EE202026" BorderBrush="#705A5A68" BorderThickness="1">
+                <TextBlock x:Name="ClipboardToastText" Text="Copied link to clipboard"
+                            Foreground="#F4F4F6" FontFamily="Segoe UI Variable Display, Segoe UI"
+                            FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"/>
             </Border>
 
         </Grid>
     </Border>
 </Window>
+

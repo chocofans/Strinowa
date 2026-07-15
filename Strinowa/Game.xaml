@@ -6,7 +6,7 @@
         Background="Transparent"
         ResizeMode="NoResize"
         Width="480" Height="360"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen" ShowInTaskbar="True"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
     <Border Margin="8" CornerRadius="10"

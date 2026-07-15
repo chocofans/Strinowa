@@ -1,16 +1,41 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon>strinowa.ico</ApplicationIcon>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
     <AssemblyName>strinowa</AssemblyName>
     <RootNamespace>StrinowaWPF</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>embedded</DebugType>
+    <AssemblyVersion>0.7.2.0</AssemblyVersion>
+    <FileVersion>0.7.2.629</FileVersion>
+    <InformationalVersion>0.7.2.0629.20260714.0949 Beta</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAPICodePack-Shell" Version="1.1.5" />
+    <Resource Include="icon.ico" />
+    <Resource Include="icon2.png" />
+    <None Remove="bg.png;bg1.png;bg.jpg" />
+    <Resource Include="bg.png" Condition="Exists('bg.png')" />
+    <Resource Include="bg1.png" Condition="Exists('bg1.png')" />
+    <Resource Include="bg.jpg" Condition="Exists('bg.jpg')" />
+    <None Remove="Resource\7za.exe;Resource\7za.dll;Resource\7zxa.dll;01.mp3;02.mp3;03.mp3" />
+    <Resource Include="Resource\7za.exe" LogicalName="7za.exe" />
+    <Resource Include="Resource\7za.dll" LogicalName="7za.dll" />
+    <Resource Include="Resource\7zxa.dll" LogicalName="7zxa.dll" />
+    <Resource Include="01.mp3" LogicalName="01.mp3" />
+    <Resource Include="02.mp3" LogicalName="02.mp3" />
+    <Resource Include="03.mp3" LogicalName="03.mp3" />
+    <None Update="Resource\conf.ini;Resource\WinBuilds.xml" CopyToPublishDirectory="PreserveNewest" />
+    <PackageReference Include="Microsoft.WindowsAPICodePack-Shell" Version="1.1.0" />
   </ItemGroup>
 </Project>
+
+

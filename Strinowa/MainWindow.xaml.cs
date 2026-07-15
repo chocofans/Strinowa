@@ -1,5 +1,6 @@
-using StrinowaWPF;
+﻿using StrinowaWPF;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -50,6 +51,52 @@ namespace StrinowaWPF
         public long? Size { get; set; }
     }
 
+    sealed class DownloadJob
+    {
+        public required string Key { get; init; }
+        public required string Label { get; init; }
+        public required string[] Destinations { get; init; }
+        public long TotalBytes { get; init; }
+        public int FileCount { get; init; }
+        public long CompletedBytes;
+        public long TransferredBytes;
+        public int CompletedFiles;
+        public DateTime StartedUtc { get; } = DateTime.UtcNow;
+        public string? Activity;
+        public string? ActivityDetail;
+    }
+
+    sealed class AsyncManualResetEvent
+    {
+        readonly object _sync = new();
+        TaskCompletionSource<bool> _source;
+
+        public AsyncManualResetEvent(bool signaled)
+        {
+            _source = CreateSource();
+            if (signaled) _source.TrySetResult(true);
+        }
+
+        public Task WaitAsync()
+        {
+            lock (_sync) return _source.Task;
+        }
+
+        public void Set()
+        {
+            lock (_sync) _source.TrySetResult(true);
+        }
+
+        public void Reset()
+        {
+            lock (_sync)
+                if (_source.Task.IsCompleted) _source = CreateSource();
+        }
+
+        static TaskCompletionSource<bool> CreateSource() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
     class Config
     {
         public int Width { get; set; } = 900;
@@ -60,17 +107,20 @@ namespace StrinowaWPF
         public bool ClearLog { get; set; } = false;
         public bool SaveBrf { get; set; } = false;
         public int SpeedKBs { get; set; } = 51200;
-        public bool FmtAsked { get; set; } = false;
+        public int UiScale { get; set; } = 100;
         public bool Fmt7z { get; set; } = true;
         public bool FmtExe { get; set; } = false;
+        public bool WinBuildScan { get; set; } = true;
+        public bool DispatchWinBuild { get; set; } = true;
+        public bool ShowDevkits { get; set; } = false;
 
-        static readonly string Path = System.IO.Path.Combine(
-            AppDomain.CurrentDomain.BaseDirectory, "conf.ini");
+        static string Path => AppPaths.ConfigPath;
 
         public static Config Load()
         {
             var cfg = new Config();
             if (!File.Exists(Path)) { cfg.Save(); return cfg; }
+            bool removeHiddenDevkitKey = false;
             foreach (var line in File.ReadAllLines(Path))
             {
                 var ln = line.Trim();
@@ -86,10 +136,18 @@ namespace StrinowaWPF
                 if (key == "clearlog" && bool.TryParse(val, out bool cl)) cfg.ClearLog = cl;
                 if (key == "savebrf" && bool.TryParse(val, out bool sb)) cfg.SaveBrf = sb;
                 if (key == "speedkbs" && int.TryParse(val, out int sp)) cfg.SpeedKBs = Math.Max(64, sp);
-                if (key == "fmtasked" && bool.TryParse(val, out bool fa)) cfg.FmtAsked = fa;
+                if (key == "uiscale" && int.TryParse(val, out int us)) cfg.UiScale = Math.Clamp(us, 50, 200);
                 if (key == "fmt7z" && bool.TryParse(val, out bool f7)) cfg.Fmt7z = f7;
                 if (key == "fmtexe" && bool.TryParse(val, out bool fe)) cfg.FmtExe = fe;
+                if (key == "winbuildscan" && bool.TryParse(val, out bool ws)) cfg.WinBuildScan = ws;
+                if (key == "dispatchwinbuild" && bool.TryParse(val, out bool dw)) cfg.DispatchWinBuild = dw;
+                if (key == "showdevkits" && bool.TryParse(val, out bool sd))
+                {
+                    cfg.ShowDevkits = sd;
+                    removeHiddenDevkitKey = !sd;
+                }
             }
+            if (removeHiddenDevkitKey) cfg.Save();
             return cfg;
         }
 
@@ -100,8 +158,10 @@ namespace StrinowaWPF
                 $"width={Width}\nheight={Height}\n" +
                 $"theme={Theme}\ncolor={Color}\nlang={Lang}\n" +
                 $"clearlog={ClearLog}\nsavebrf={SaveBrf}\n" +
-                $"speedkbs={SpeedKBs}\n" +
-                $"fmtasked={FmtAsked}\nfmt7z={Fmt7z}\nfmtexe={FmtExe}\n");
+                $"speedkbs={SpeedKBs}\nuiscale={UiScale}\n" +
+                $"fmt7z={Fmt7z}\nfmtexe={FmtExe}\n" +
+                $"WinBuildScan={WinBuildScan}\nDispatchWinBuild={DispatchWinBuild}\n" +
+                (ShowDevkits ? "ShowDevkits=True\n" : ""));
         }
     }
 
@@ -109,8 +169,11 @@ namespace StrinowaWPF
 
     public partial class MainWindow : Window
     {
+        static readonly bool debug = false;
+
         const string OS_ROOT = "https://resource-download.strinova.com/Client/Win/GameDepot";
-        const string CN_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.tencentcos.cn/Client/Win/GameDepot";
+        const string CN_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.myqcloud.com/Client/Win/GameDepot";
+        const string CN_ALL_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.myqcloud.com/Client/Win/GameDepot";
 
         const string PC_ROOT = "https://klbqcp-client-cdn.gxpan.cn/Client/Win/GameDepot";
         const string QQ_ROOT = "https://down.klbq.qq.com/Client/Win/GameDepot";
@@ -120,7 +183,7 @@ namespace StrinowaWPF
         //const string PM_ROOT = "http://192.168.16.77/PMGame"
 
         // PM is internally used in CN. uncomment once you have IDreamSky Feishu VPN
-        // should be referenced elsewhere. If i did it right. lol although claude hopefully didnt fck it?
+        // should be referenced elsewhere. If i did it right.
         // youll add "pm" to the valid source list in DispatchAsync and bruteforce source selectors
         // pmroot will still manifest differently. It might lack PAKs
 
@@ -128,6 +191,9 @@ namespace StrinowaWPF
         //klbqcm-pack.dl.gxpan.cn
         //klbqcp-tiyan-dir.gxpan.cn:11711
         //2026-06-21
+
+        //klbqcm-client-cdn
+        //2026-07-14
 
         static readonly HttpClient Http = new(new HttpClientHandler
         {
@@ -139,19 +205,47 @@ namespace StrinowaWPF
 
         Config _cfg = new();
         bool _busy = false;
-        string _currentHint = "<channel>  <OS|CN|PC|QQ>  <version>  [-b | -lb]";
+        bool _versionClickBusy;
+        string _currentHint = "<channel>  <OS|CN|PC>  <version>  [-b]";
         readonly List<string> _history = new();
         int _histIdx = -1;
+        string _historyDraft = "";
+        string _bruteSource = "os";
+        bool _bruteLauncherMode = true;
+        bool _bruteSaveTxt = true;
+        CancellationTokenSource? _bruteCts;
+        bool _bruteOwnsDownloadPanel;
+        Manifest? _manifestScanner;
+        double _uiScale = 1.0;
 
-        long _dlTotal = 0;
-        long _dlDone = 0;
-        int _dlFilesTotal = 0;
-        int _dlFilesDone = 0;
-        long _dlBytes = 0;
-#pragma warning disable CS0414
-        long _dlBytesLast = 0; // <-- DO NOT REMOVE IT FUCKS EVERYTHING
-        DateTime _dlStart;
+        readonly object _downloadJobsLock = new();
+        readonly Dictionary<string, DownloadJob> _downloadJobs = new(StringComparer.OrdinalIgnoreCase);
+        readonly HashSet<string> _activeDownloadDestinations = new(StringComparer.OrdinalIgnoreCase);
+        readonly SemaphoreSlim _downloadSlots = new(8, 8);
         System.Windows.Threading.DispatcherTimer? _dlTimer;
+        TaskCompletionSource<bool>? _downloadConfirmSource;
+        List<AllDownloadChoice> _multiDownloadChoices = [];
+        readonly HashSet<string> _multiDownloadSelected = new(StringComparer.OrdinalIgnoreCase);
+        bool _launcherFormatConfirmation;
+        bool _downloadPreparationVisible;
+        long? _launcher7zSize;
+        long? _launcherExeSize;
+        long _dlLastSampleBytes;
+        DateTime _dlLastSampleUtc = DateTime.UtcNow;
+        double _dlSmoothedBytesPerSecond;
+        bool _downloadCompletionVisible;
+        string? _completedDownloadFolder;
+        string _completedDownloadLabel = "Download complete";
+
+        DispatcherTimer? _debugTimer;
+        DispatcherTimer? _clipboardToastTimer;
+        readonly Stopwatch _debugUptime = Stopwatch.StartNew();
+        bool _debugVisible;
+        bool _debugChordLatched;
+        long _debugLastTransferred;
+        DateTime _debugLastSampleUtc = DateTime.UtcNow;
+        TimeSpan _debugLastCpuTime;
+        double _debugUiLagMs;
 
         SemaphoreSlim? _promptSem;
         bool _promptResult;
@@ -167,19 +261,38 @@ namespace StrinowaWPF
         }
 
         DevkitColorAnimator _devkitAnim = new(TermColorPreset.AdaptiveWhiteBlack);
+        readonly List<DevkitTerminalWave> _terminalDevkitWaves = new();
 
         public MainWindow()
         {
             InitializeComponent();
-            Http.DefaultRequestHeaders.UserAgent.ParseAdd("Strinowa-WPF-Downloader/0.70-Beta1");
+            ContentRendered += Window_ContentRendered;
+            Closed += (_, _) =>
+            {
+                StopDebugOverlay();
+                _downloadConfirmSource?.TrySetResult(false);
+            };
+            Http.DefaultRequestHeaders.UserAgent.ParseAdd("Strinowa-WPF-Downloader/1.11");
             TC.Devkit = _devkitAnim.Brush;
+            if (debug) SetDebugOverlayVisible(true);
+        }
+
+        void Window_ContentRendered(object? sender, EventArgs e)
+        {
+            ContentRendered -= Window_ContentRendered;
+            if (AppTheme.CurrentTheme != LauncherTheme.Acrylic) return;
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                ApplyCurrentWindowDimensions();
+                ApplyTheme();
+                UpdateWindowClip();
+            }, DispatcherPriority.ContextIdle);
         }
 
         void Window_Loaded(object sender, RoutedEventArgs e)
         {
             _cfg = Config.Load();
-            Width = _cfg.Width + 16;
-            Height = _cfg.Height + 16;
 
             if (Enum.TryParse<LauncherTheme>(_cfg.Theme, out var t)) AppTheme.CurrentTheme = t;
             if (Enum.TryParse<TermColorPreset>(_cfg.Color, out var c)) AppTheme.CurrentTermPreset = c;
@@ -187,17 +300,44 @@ namespace StrinowaWPF
             AppSettings.ClearLogOnFinish = _cfg.ClearLog;
             AppSettings.SaveBruteforceToFile = _cfg.SaveBrf;
             AppSettings.SpeedLimitKBs = _cfg.SpeedKBs;
-            AppSettings.LauncherFormatAsked = _cfg.FmtAsked;
+            ApplyUiScale(_cfg.UiScale);
             AppSettings.LauncherDefault7z = _cfg.Fmt7z;
             AppSettings.LauncherDefaultExe = _cfg.FmtExe;
+            AppSettings.ShowDevkits = _cfg.ShowDevkits;
 
             ApplyTheme();
             InputHint.Text = Strings.Get("hint");
             InputBox.Focus();
             ShowHeader();
+            UpdateAdvancedBruteUi();
             _isFirstOpen = false;
         }
 
+        public int CurrentUiScale => (int)(_uiScale * 100);
+        double WindowFrameAllowance => 0;
+
+        void ApplyCurrentWindowDimensions()
+        {
+            Width = (_cfg.Width + WindowFrameAllowance) * _uiScale;
+            Height = (_cfg.Height + WindowFrameAllowance) * _uiScale;
+        }
+
+        public void ApplyUiScale(int percent)
+        {
+            _uiScale = Math.Clamp(percent, 50, 200) / 100.0;
+            _cfg.UiScale = (int)Math.Round(_uiScale * 100);
+            MinWidth = 760 * _uiScale;
+            MinHeight = 380 * _uiScale;
+            OuterBorder.LayoutTransform = new ScaleTransform(_uiScale, _uiScale);
+            ApplyCurrentWindowDimensions();
+            UpdateWindowClip();
+        }
+
+        public void ApplyWindowPreset(int width, int height)
+        {
+            _cfg.Width = width; _cfg.Height = height;
+            ApplyCurrentWindowDimensions();
+        }
         void ShowHeader()
         {
             ClearTerminal();
@@ -234,8 +374,11 @@ namespace StrinowaWPF
 
         public void ApplyTheme()
         {
+            Title = Strings.Get("title");
+            TitleVersionText.Text = Strings.Get("title");
             bool isLight = AppTheme.CurrentTheme == LauncherTheme.Light;
             bool isMidnight = AppTheme.CurrentTheme == LauncherTheme.Midnight;
+            bool isAcrylic = AppTheme.CurrentTheme == LauncherTheme.Acrylic;
             bool isPink = AppTheme.CurrentTermPreset == TermColorPreset.PinkAccent;
 
             // aurora
@@ -262,24 +405,39 @@ namespace StrinowaWPF
                     bgCol = C(0x00, 0x00, 0x00); titleCol = C(0x00, 0x00, 0x00);
                     sepCol = C(0x18, 0x18, 0x26); inputCol = C(0x00, 0x00, 0x00);
                     break;
+                case LauncherTheme.Acrylic:
+                    bgCol = C(0x18, 0x26, 0x26, 0x26); titleCol = C(0x24, 0x30, 0x30, 0x30);
+                    sepCol = C(0x2A, 0xA8, 0xA8, 0xA8); inputCol = C(0x30, 0x1C, 0x1C, 0x1C);
+                    break;
                 default: // Light
                     bgCol = C(0xE8, 0xE8, 0xF0); titleCol = C(0xD8, 0xD8, 0xE8);
                     sepCol = C(0xB0, 0xB0, 0xC8); inputCol = C(0xF5, 0xF5, 0xFF);
                     break;
             }
-            var borderCol = isLight ? C(0xB0, 0xB0, 0xC8) : C(0x2E, 0x2E, 0x38);
+            var borderCol = isAcrylic ? Colors.Transparent : isLight ? C(0xB0, 0xB0, 0xC8) : C(0x2E, 0x2E, 0x38);
+
+            Resources["ControlSurfaceBrush"] = isAcrylic ? B(0x3C, 0x3A, 0x3A, 0x3A) : isLight ? B(0xE0, 0xE0, 0xEC) : B(0x24, 0x24, 0x2D);
+            Resources["ControlHoverBrush"] = isAcrylic ? B(0x58, 0x58, 0x58, 0x58) : isLight ? B(0xC8, 0xC8, 0xD8) : B(0x33, 0x33, 0x41);
+            Resources["ControlPressedBrush"] = isAcrylic ? B(0x68, 0x2B, 0x2B, 0x2B) : isLight ? B(0xB8, 0xB8, 0xCA) : B(0x4E, 0x4E, 0x5E);
+            Resources["ControlTextBrush"] = isAcrylic ? B(0xF7, 0xFA, 0xFF) : isLight ? B(0x22, 0x22, 0x30) : B(0xF0, 0xF0, 0xF0);
+            Resources["ScrollThumbBrush"] = isAcrylic ? B(0x28, 0xD0, 0xD0, 0xD0) : isLight ? B(0x78, 0x70, 0x70, 0x80) : B(0x3A, 0x3A, 0x4A);
 
             Animate(OuterBorder, Border.BackgroundProperty, bgCol);
             Animate(OuterBorder, Border.BorderBrushProperty, borderCol);
+            OuterBorder.Margin = new Thickness(0);
+            OuterBorder.BorderThickness = new Thickness(0);
+            OuterBorder.Effect = null;
             Animate(TitleBarBorder, Border.BackgroundProperty, titleCol);
             AnimateRect(SepRect, sepCol);
             Animate(InputRowBorder, Border.BackgroundProperty, inputCol);
             Animate(InputRowBorder, Border.BorderBrushProperty, sepCol);
 
-            var dlBgCol = isMidnight ? C(0x00, 0x00, 0x00)
+            var dlBgCol = isAcrylic ? C(0x28, 0x1C, 0x1C, 0x1C)
+                           : isMidnight ? C(0x00, 0x00, 0x00)
                            : isLight ? C(0xE0, 0xE0, 0xEC)
-                                        : C(0x0E, 0x0E, 0x16);
-            var dlTrackCol = isMidnight ? C(0x10, 0x10, 0x18)
+                                         : C(0x0E, 0x0E, 0x16);
+            var dlTrackCol = isAcrylic ? C(0x48, 0x58, 0x58, 0x58)
+                           : isMidnight ? C(0x10, 0x10, 0x18)
                            : isLight ? C(0xC0, 0xC0, 0xD4)
                                         : C(0x1E, 0x1E, 0x2A);
             Animate(DownloadPanel, Border.BackgroundProperty, dlBgCol);
@@ -288,7 +446,7 @@ namespace StrinowaWPF
 
             if (isPink)
             {
-                //Text1=#FF004D, Text2=#FF0077, Text3=#F03A95, Devkit wave #B31741→#B033A3, Deprecated=#610E60 2026-06-18
+                //Text1=#FF004D, Text2=#FF0077, Text3=#F03A95, Devkit wave #B31741â†’#B033A3, Deprecated=#610E60 2026-06-18
                 TC.Normal = B(0xFF, 0x00, 0x4D);
                 TC.CN = B(0xFF, 0x00, 0x77);
                 TC.Release = B(0xF0, 0x3A, 0x95);
@@ -301,6 +459,21 @@ namespace StrinowaWPF
                 DlEta.Foreground = B(0x61, 0x0E, 0x60);
 
                 SetDlFillColors(C(0xFF, 0x00, 0x4D), C(0x61, 0x0E, 0x60));
+            }
+            else if (isAcrylic)
+            {
+                TC.Normal = B(0xF7, 0xFA, 0xFF);
+                TC.CN = B(0xD7, 0xE0, 0xE9);
+                TC.Release = B(0xB6, 0xC2, 0xD0);
+                TC.Deprecated = B(0x7E, 0x8B, 0x9A);
+                TerminalBox.Foreground = TC.Normal;
+
+                DlLabel.Foreground = B(0xF7, 0xFA, 0xFF);
+                DlStats.Foreground = B(0xD7, 0xE0, 0xE9);
+                DlSubLabel.Foreground = B(0xD7, 0xE0, 0xE9);
+                DlEta.Foreground = B(0xA8, 0xB5, 0xC4);
+
+                SetDlFillColors(C(0xF4, 0xA7, 0xC5), C(0x91, 0xB9, 0xD8));
             }
             else if (isLight)
             {
@@ -334,10 +507,10 @@ namespace StrinowaWPF
             }
 
 
-            var titleFg = isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
-            var hintFg = isLight ? B(0x77, 0x77, 0x99) : B(0x40, 0x40, 0x55);
-            var inputFg = isLight ? B(0x11, 0x11, 0x22) : B(0xE8, 0xE8, 0xE8);
-            var btnFg = isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC);
+            var titleFg = isAcrylic ? B(0xF7, 0xFA, 0xFF) : isLight ? B(0x22, 0x22, 0x30) : B(0xDD, 0xDD, 0xDD);
+            var hintFg = isAcrylic ? B(0xB2, 0xB2, 0xB2) : isLight ? B(0x77, 0x77, 0x99) : B(0x40, 0x40, 0x55);
+            var inputFg = isAcrylic ? B(0xF7, 0xFA, 0xFF) : isLight ? B(0x11, 0x11, 0x22) : B(0xE8, 0xE8, 0xE8);
+            var btnFg = isAcrylic ? B(0xF1, 0xF5, 0xFA) : isLight ? B(0x22, 0x22, 0x30) : B(0xCC, 0xCC, 0xCC);
 
             TitleVersionText.Foreground = titleFg;
             InputHint.Foreground = hintFg;
@@ -345,6 +518,18 @@ namespace StrinowaWPF
             ChevronBlock.Foreground = B(0xDC, 0x32, 0x78);
             MinimizeBtn.Foreground = btnFg;
             CloseBtn.Foreground = btnFg;
+            PauseBtn.Foreground = isAcrylic ? B(0xD7, 0xE0, 0xE9) : btnFg;
+            ClipboardToast.Background = isAcrylic ? B(0xD8, 0x28, 0x28, 0x2E)
+                : isLight ? B(0xF2, 0xF2, 0xF8)
+                : isMidnight ? B(0xF0, 0x0E, 0x0E, 0x12)
+                : B(0xF0, 0x20, 0x20, 0x26);
+            ClipboardToast.BorderBrush = isAcrylic ? B(0x78, 0xE0, 0xE0, 0xE8)
+                : isLight ? B(0xB0, 0xB0, 0xC8)
+                : B(0x5A, 0x5A, 0x68);
+            ClipboardToastText.Foreground = isLight ? B(0x22, 0x22, 0x30) : B(0xF4, 0xF4, 0xF6);
+            LogoGlass.Background = isAcrylic ? B(0x48, 0xE8, 0xE8, 0xE8) : Brushes.Transparent;
+            LogoGlass.BorderBrush = isAcrylic ? B(0x70, 0xFF, 0xFF, 0xFF) : Brushes.Transparent;
+            AcrylicHelper.ApplyBackdrop(this, isAcrylic, borderlessFullWindow: true);
             InputHint.Text = Strings.Get("hint");
             TitleVersionText.Text = Strings.Get("title");
 
@@ -354,17 +539,45 @@ namespace StrinowaWPF
             _devkitAnim = new DevkitColorAnimator(AppTheme.CurrentTermPreset);
             TC.Devkit = _devkitAnim.Brush;
 
-            // Recolor all existing terminal runs so theme change applies immediately
             RecolorTerminal();
+            _manifestScanner?.ApplyTheme();
+            UpdateAdvancedBruteUi();
+            if (IsLoaded) ApplyCurrentWindowDimensions();
+            UpdateWindowClip();
         }
 
-        // Walk all blocks in the terminal and re-apply the correct brush for each color identity
+        void UpdateWindowClip()
+        {
+            if (AppTheme.CurrentTheme != LauncherTheme.Acrylic ||
+                OuterBorder.ActualWidth <= 0 || OuterBorder.ActualHeight <= 0)
+            {
+                OuterBorder.Clip = null;
+                return;
+            }
+
+            OuterBorder.Clip = new RectangleGeometry(
+                new Rect(0, 0, OuterBorder.ActualWidth, OuterBorder.ActualHeight), 10, 10);
+        }
+
+        void ActivateExistingDevkitWaves()
+        {
+            foreach (var block in TerminalBox.Document.Blocks.OfType<BlockUIContainer>())
+            {
+                if (block.Child is not TextBlock tb || !tb.Text.Contains("[Devkit]", StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var run in tb.Inlines.OfType<System.Windows.Documents.Run>().ToList())
+                {
+                    if (string.IsNullOrWhiteSpace(run.Text) || run.Text.Contains("GMT+", StringComparison.OrdinalIgnoreCase)) continue;
+                    var span = new System.Windows.Documents.Span { FontWeight = run.FontWeight };
+                    tb.Inlines.InsertBefore(run, span);
+                    tb.Inlines.Remove(run);
+                    _terminalDevkitWaves.Add(new DevkitTerminalWave(span, run.Text, AppTheme.CurrentTermPreset));
+                }
+            }
+        }
         void RecolorTerminal()
         {
             var brushMap = new Dictionary<SolidColorBrush, SolidColorBrush>
             {
-                // map old instances to current TC brushes by color proximity is fragile —
-                // instead we compare reference to known TC fields set before calling this
             };
 
             foreach (var block in TerminalBox.Document.Blocks.ToList())
@@ -382,7 +595,6 @@ namespace StrinowaWPF
 
         SolidColorBrush RemapBrush(SolidColorBrush old)
         {
-            // remap by approximate color identity — covers the most common cases
             var c = old.Color;
             if (IsClose(c, TC.Normal.Color)) return TC.Normal;
             if (IsClose(c, TC.CN.Color)) return TC.CN;
@@ -406,6 +618,12 @@ namespace StrinowaWPF
                     new ColorAnimation(lo, dur) { EasingFunction = ease });
                 gb.GradientStops[2].BeginAnimation(GradientStop.ColorProperty,
                     new ColorAnimation(hi, dur) { EasingFunction = ease });
+                var wave = new TranslateTransform(-0.8, 0);
+                gb.RelativeTransform = wave;
+                wave.BeginAnimation(TranslateTransform.XProperty,
+                    new DoubleAnimation(-0.8, 0.8, TimeSpan.FromSeconds(1.15))
+                    { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever,
+                      EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
             }
         }
 
@@ -433,13 +651,14 @@ namespace StrinowaWPF
         }
 
         static Color C(byte r, byte g, byte b) => Color.FromRgb(r, g, b);
+        static Color C(byte a, byte r, byte g, byte b) => Color.FromArgb(a, r, g, b);
         static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+        static SolidColorBrush B(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
 
         bool _isFirstOpen = true;
 
         void AppendLine(IEnumerable<TermSpan> spans, bool newline = true)
         {
-            //  (UIElement — has RenderTransform)
             var tb = new TextBlock
             {
                 FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
@@ -475,7 +694,8 @@ namespace StrinowaWPF
         void AppendText(string text, SolidColorBrush? color = null, bool bold = false)
             => AppendLine([new(text, color ?? TC.Normal, bold)]);
 
-        void AppendClickableLine(IEnumerable<TermSpan> spans, string clickCommand)
+        void AppendClickableLine(IEnumerable<TermSpan> spans, string clickCommand, string? copyUrl = null,
+            bool hiddenBuild = false, IReadOnlyList<string>? matchingBranches = null)
         {
             var tb = new TextBlock
             {
@@ -484,7 +704,9 @@ namespace StrinowaWPF
                 Margin = new Thickness(0),
                 TextWrapping = TextWrapping.Wrap,
                 Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = $"Click to download: {clickCommand}",
+                ToolTip = copyUrl == null
+                    ? $"Click to download: {clickCommand}"
+                    : $"Click to download: {clickCommand}\nRight-click to copy link",
             };
             bool any = false;
             foreach (var sp in spans)
@@ -495,21 +717,73 @@ namespace StrinowaWPF
                 any = true;
             }
             if (!any) tb.Inlines.Add(new System.Windows.Documents.Run(""));
+            if (hiddenBuild)
+            {
+                tb.Inlines.Add(new System.Windows.Documents.Run(" ⚑")
+                {
+                    Foreground = TC.Warn,
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    ToolTip = "This is a Hidden build. It is not stored on the public manifest.",
+                    Cursor = Cursors.Help,
+                });
+            }
+            if (matchingBranches is { Count: > 1 })
+            {
+                tb.Inlines.Add(new System.Windows.Documents.Run(" ⧉")
+                {
+                    Foreground = TC.Info,
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    ToolTip = $"Appears on Branches {string.Join(", ", matchingBranches)}",
+                    Cursor = Cursors.Help,
+                });
+            }
 
             var cmd = clickCommand;
-            tb.MouseLeftButtonDown += (_, _) =>
+            tb.MouseLeftButtonDown += async (_, _) =>
             {
-                if (!_busy)
+                var parts = cmd.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3 && parts[0].Equals("dl", StringComparison.OrdinalIgnoreCase) &&
+                    _lastScanCtx != null)
                 {
-                    InputBox.Text = cmd;
-                    InputBox.Focus();
-                    InputBox.CaretIndex = cmd.Length;
-                    InputHint.Visibility = Visibility.Collapsed;
+                    if (_versionClickBusy) return;
+                    _versionClickBusy = true;
+                    try
+                    {
+                        await HandleClickDownload(_lastScanCtx, parts[1], parts[2]);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendText($"  Could not open download: {ex.Message}", TC.Warn);
+                        ShowModernError(ex, "Could not open download");
+                    }
+                    finally { _versionClickBusy = false; }
+                    return;
                 }
+
+                if (_busy) return;
+                InputBox.Text = cmd;
+                InputBox.Focus();
+                InputBox.CaretIndex = cmd.Length;
+                InputHint.Visibility = Visibility.Collapsed;
             };
+            if (!string.IsNullOrWhiteSpace(copyUrl))
+            {
+                tb.MouseRightButtonUp += (_, e) =>
+                {
+                    try
+                    {
+                        Clipboard.SetText(copyUrl);
+                        ShowClipboardToast();
+                    }
+                    catch { }
+                    e.Handled = true;
+                };
+            }
             tb.MouseEnter += (_, _) =>
             {
-                foreach (System.Windows.Documents.Run r in tb.Inlines)
+                foreach (var r in tb.Inlines.OfType<System.Windows.Documents.Run>())
                 {
                     if (r.Foreground is SolidColorBrush b && b != TC.Removed && b != TC.Dim)
                     {
@@ -522,7 +796,7 @@ namespace StrinowaWPF
             };
             tb.MouseLeave += (_, _) =>
             {
-                foreach (System.Windows.Documents.Run r in tb.Inlines)
+                foreach (var r in tb.Inlines.OfType<System.Windows.Documents.Run>())
                 {
                     if (r.Tag is Brush original)
                         r.Foreground = original;
@@ -540,9 +814,73 @@ namespace StrinowaWPF
             ScrollToBottom();
         }
 
+        void ShowClipboardToast(string text = "Copied link to clipboard")
+        {
+            SoundEffects.Popup();
+            ShowToast(text, false);
+        }
+
+        public void ShowModernError(Exception exception, string? context = null)
+        {
+            SoundEffects.Error();
+            var code = $"0x{exception.HResult:X8}";
+            var heading = string.IsNullOrWhiteSpace(context) ? "Error" : context;
+            ShowToast($"{heading}  •  {code}\n{exception.Message}", true);
+        }
+
+        void ShowToast(string text, bool error)
+        {
+            _clipboardToastTimer?.Stop();
+            ClipboardToastText.Text = text;
+            var light = AppTheme.CurrentTheme == LauncherTheme.Light;
+            var acrylic = AppTheme.CurrentTheme == LauncherTheme.Acrylic;
+            ClipboardToast.Background = acrylic ? B(0xE8, 0x28, 0x28, 0x2C)
+                : light ? B(0xF4, 0xF4, 0xF8) : B(0xEE, 0x20, 0x20, 0x26);
+            ClipboardToast.BorderBrush = error ? B(0xD0, 0xDC, 0x32, 0x78)
+                : acrylic ? B(0x90, 0xC8, 0xC8, 0xD0) : B(0x70, 0x5A, 0x5A, 0x68);
+            ClipboardToastText.Foreground = light ? B(0x22, 0x22, 0x2A) : B(0xF4, 0xF4, 0xF6);
+            ClipboardToast.BeginAnimation(OpacityProperty, null);
+            ClipboardToast.Visibility = Visibility.Visible;
+            ClipboardToast.Opacity = 0;
+            var move = new TranslateTransform(0, 8);
+            ClipboardToast.RenderTransform = move;
+            ClipboardToast.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)));
+            move.BeginAnimation(TranslateTransform.YProperty,
+                new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(160))
+                { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } });
+
+            _clipboardToastTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(error ? 5000 : 1500)
+            };
+            _clipboardToastTimer.Tick += (_, _) =>
+            {
+                _clipboardToastTimer?.Stop();
+                var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(180));
+                fade.Completed += (_, _) => ClipboardToast.Visibility = Visibility.Collapsed;
+                ClipboardToast.BeginAnimation(OpacityProperty, fade);
+            };
+            _clipboardToastTimer.Start();
+        }
+
+        static string BuildFileListUrl(string root, string branch, string version) =>
+            branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
+                ? $"{root}/{branch}/{version}/full_{version}.7z"
+                : $"{root}/{branch}/{version}/full_zip/manifest.txt";
+
         async Task HandleClickDownload(ScanContext ctx, string version, string source)
         {
             var src = source.ToLower();
+            if (ctx.MultiChoices?.TryGetValue(MultiChoiceKey(version, source), out var multiChoices) == true &&
+                multiChoices.Count > 1)
+            {
+                var selected = await ConfirmMultiDownloadInPanelAsync(version, multiChoices);
+                foreach (var choice in selected)
+                    await CeciliaDownloadAsync(RootForSource(choice.Source), choice.ResolvedBranch,
+                        choice.Version, null, true);
+                return;
+            }
             if (!ctx.Maps.TryGetValue(src.ToUpper(), out var entry))
             {
                 // try case-insensitive lookup
@@ -553,17 +891,17 @@ namespace StrinowaWPF
             }
             if (string.IsNullOrEmpty(entry.root))
             {
-                AppendText($"  source '{src.ToUpper()}' not found in scan — re-run the scan.", TC.Warn);
+                AppendText($"  source '{src.ToUpper()}' not found in scan â€” re-run the scan.", TC.Warn);
                 return;
             }
-            AppendLine([]);
-            AppendLine([
-                new("  auto-download  ", TC.Dim),
-                new(version, entry.types.GetValueOrDefault(version, "Devkit") == "Release" ? TC.Release : TC.Devkit, true),
-                new($"  [{src.ToUpper()}]", TC.Dim),
-            ]);
-            // compose the command string the same way the manual path does and re-dispatch
-            await RunCommandAsync($"{ctx.Branch} {src.ToUpper()} {version}");
+            if (!entry.vers.Contains(version))
+            {
+                AppendText("  Version not found in this source.", TC.Warn);
+                return;
+            }
+
+            var pickedBranch = entry.choice.GetValueOrDefault(version, ctx.Branch);
+            await CeciliaDownloadAsync(entry.root, pickedBranch, version, null);
         }
 
         BlockUIContainer? _loaderBlock = null;
@@ -663,18 +1001,12 @@ namespace StrinowaWPF
         {
             if (e.Key == Key.Up)
             {
-                if (_history.Count == 0) return;
-                _histIdx = Math.Min(_histIdx + 1, _history.Count - 1);
-                InputBox.Text = _history[_history.Count - 1 - _histIdx];
-                InputBox.CaretIndex = InputBox.Text.Length;
+                NavigateCommandHistory(older: true);
                 e.Handled = true; return;
             }
             if (e.Key == Key.Down)
             {
-                if (_histIdx <= 0) { _histIdx = -1; InputBox.Text = ""; return; }
-                _histIdx--;
-                InputBox.Text = _history[_history.Count - 1 - _histIdx];
-                InputBox.CaretIndex = InputBox.Text.Length;
+                NavigateCommandHistory(older: false);
                 e.Handled = true; return;
             }
             if (e.Key != Key.Enter) return;
@@ -683,6 +1015,7 @@ namespace StrinowaWPF
             InputBox.Text = "";
             InputHint.Visibility = Visibility.Visible;
             _histIdx = -1;
+            _historyDraft = "";
 
             if (!string.IsNullOrEmpty(raw))
                 _history.Add(raw);
@@ -706,6 +1039,34 @@ namespace StrinowaWPF
             if (_busy) return;
             AppendLine([new("> ", TC.Pink, true), new(raw, TC.Normal)]);
             await RunCommandAsync(raw);
+        }
+
+        void NavigateCommandHistory(bool older)
+        {
+            if (_history.Count == 0) return;
+
+            if (older)
+            {
+                if (_histIdx < 0) _historyDraft = InputBox.Text;
+                _histIdx = Math.Min(_histIdx + 1, _history.Count - 1);
+                InputBox.Text = _history[_history.Count - 1 - _histIdx];
+            }
+            else if (_histIdx > 0)
+            {
+                _histIdx--;
+                InputBox.Text = _history[_history.Count - 1 - _histIdx];
+            }
+            else
+            {
+                _histIdx = -1;
+                InputBox.Text = _historyDraft;
+            }
+
+            InputBox.Focus();
+            InputBox.CaretIndex = InputBox.Text.Length;
+            InputHint.Visibility = string.IsNullOrEmpty(InputBox.Text)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         async Task<bool> AskYesNo(string question, bool defaultNo = true)
@@ -745,6 +1106,7 @@ namespace StrinowaWPF
             catch (Exception ex)
             {
                 AppendText($"  error: {ex.Message}", TC.Warn);
+                ShowModernError(ex, "Command error");
             }
             finally
             {
@@ -754,13 +1116,23 @@ namespace StrinowaWPF
             }
         }
 
+        async Task RunAdvancedBruteforceFromUiAsync()
+        {
+            await RunAdvancedBruteforceAsync(
+                BruteChannelBox.Text.Trim(),
+                _bruteSource,
+                BruteStartBox.Text.Trim(),
+                BruteEndBox.Text.Trim(),
+                _bruteLauncherMode,
+                _bruteSaveTxt);
+        }
+
         void UpdateLoaderProgress(int step, int total, string text)
         {
             Dispatcher.Invoke(() =>
             {
                 if (_loaderBlock?.Child is StackPanel row)
                 {
-                    // label is the second child (index 1)
                     if (row.Children.Count >= 2 && row.Children[1] is TextBlock tb)
                     {
                         tb.Text = text;
@@ -768,6 +1140,99 @@ namespace StrinowaWPF
                 }
             });
         }
+
+        void BruteSource_Click(object s, RoutedEventArgs e)
+        {
+            if (s is Button b && b.Tag is string src)
+            {
+                _bruteSource = src;
+                UpdateAdvancedBruteUi();
+            }
+        }
+
+        void BruteMode_Click(object s, RoutedEventArgs e)
+        {
+            if (s is Button b && b.Tag is string mode)
+            {
+                _bruteLauncherMode = mode == "launcher";
+                UpdateAdvancedBruteUi();
+            }
+        }
+
+        void BruteResult_Click(object s, RoutedEventArgs e)
+        {
+            if (s is Button b && b.Tag is string kind)
+            {
+                if (kind == "txt") _bruteSaveTxt = !_bruteSaveTxt;
+                UpdateAdvancedBruteUi();
+            }
+        }
+
+        async void BruteStart_Click(object s, RoutedEventArgs e)
+        {
+            if (_busy) return;
+            var branch = BruteChannelBox.Text.Trim();
+            var startV = BruteStartBox.Text.Trim();
+            var finishV = BruteEndBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(branch))
+            {
+                AppendText("  Bruteforce channel is empty.", TC.Warn);
+                return;
+            }
+            if (!IsValidVersion(startV) || !IsValidVersion(finishV))
+            {
+                AppendText("  Bruteforce versions must use a.b.c.d format.", TC.Warn);
+                return;
+            }
+
+            _busy = true;
+            ChevronBlock.Foreground = TC.Dim;
+            try
+            {
+                await RunAdvancedBruteforceAsync(
+                    branch, _bruteSource, startV, finishV,
+                    _bruteLauncherMode, _bruteSaveTxt);
+            }
+            catch (Exception ex)
+            {
+                AppendText($"  bruteforce error: {ex.Message}", TC.Warn);
+                ShowModernError(ex, "Scanner error");
+            }
+            finally
+            {
+                _busy = false;
+                _bruteCts?.Dispose();
+                _bruteCts = null;
+                ChevronBlock.Foreground = TC.Pink;
+                StopBruteProgress();
+            }
+        }
+
+        void BruteCancel_Click(object s, RoutedEventArgs e)
+        {
+            _bruteCts?.Cancel();
+        }
+
+        void UpdateAdvancedBruteUi()
+        {
+            bool isAcrylic = AppTheme.CurrentTheme == LauncherTheme.Acrylic;
+            var idle = Resources["ControlSurfaceBrush"] as Brush ?? B(0x24, 0x24, 0x2D);
+            var text = Resources["ControlTextBrush"] as Brush ?? B(0xF0, 0xF0, 0xF0);
+            void Set(Button b, bool on)
+            {
+                b.Background = on
+                    ? (isAcrylic ? B(0x88, 0x70, 0x70, 0x70) : B(0x5A, 0x5A, 0x68))
+                    : idle;
+                b.Foreground = on ? Brushes.White : text;
+            }
+            Set(BruteOsBtn, _bruteSource == "os");
+            Set(BruteCnBtn, _bruteSource == "cn");
+            Set(BrutePcBtn, _bruteSource == "pc");
+            Set(BruteLauncherBtn, _bruteLauncherMode);
+            Set(BruteGameBtn, !_bruteLauncherMode);
+            Set(BruteTxtBtn, _bruteSaveTxt);
+        }
+
         async Task DispatchAsync(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw))
@@ -807,7 +1272,7 @@ namespace StrinowaWPF
                         return;
                     }
                 }
-                AppendText("  No scan context — run a scan first.", TC.Warn);
+                AppendText("  No scan context â€” run a scan first.", TC.Warn);
                 return;
             }
 
@@ -819,15 +1284,10 @@ namespace StrinowaWPF
                 return;
             }
 
-            if (launcherBrute)
-            {
-                await RunBruteforceLauncherAsync(branch);
-                ShowHeader();
-                return;
-            }
             if (gameBrute)
             {
-                await RunBruteforceAsync(branch);
+                BruteChannelBox.Text = branch;
+                await RunAdvancedBruteforceFromUiAsync();
                 ShowHeader();
                 return;
             }
@@ -839,16 +1299,18 @@ namespace StrinowaWPF
             }
 
             ShowHeader();
-            var ctx = await ScanBranchAsync(branch, src, hiddenVer);
+            var ctx = branch.Equals("Game_All", StringComparison.OrdinalIgnoreCase) ||
+                      branch.Equals("Launcher_All", StringComparison.OrdinalIgnoreCase)
+                ? await ScanAllBranchesAsync(branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher" : "Game", src)
+                : await ScanBranchAsync(branch, src, hiddenVer);
             if (ctx == null) { ShowHeader(); return; }
 
-            SetHint("<version>  or  <branch>  or  <branch -b>  or  <branch -lb>");
+            SetHint("<version>  or  <branch>  or  <branch -b>");
             while (true)
             {
                 var dlChoice = await AskInput("");
                 if (string.IsNullOrWhiteSpace(dlChoice)) { ShowHeader(); break; }
 
-                // allow commands inside the post-scan loop
                 var dlLo = dlChoice.Trim().ToLowerInvariant();
                 if (dlLo is "cls" or "clear") { ClearTerminal(); ShowHeader(); continue; }
                 if (dlLo is "help" or "?") { ShowHelp(); continue; }
@@ -877,16 +1339,10 @@ namespace StrinowaWPF
                             new($"[{buildType}]", buildColor),
                             new($" (branch: {pickedBranch})", TC.Dim),
                         ]);
-                        if (await AskYesNo($"Download {pickedBranch} {version} from {LinkLabel(baseRoot)}?", defaultNo: true))
-                        {
-                            ShowHeader();
-                            await CeciliaDownloadAsync(baseRoot, pickedBranch, version, null);
-                        }
-                        else AppendText("  Cancelled.", TC.Dim);
-
-                        if (!await AskYesNo("Download another build?", defaultNo: true)) return;
                         ShowHeader();
-                        SetHint("<version>  or  <branch>  or  <branch -b>  or  <branch -lb>");
+                        await CeciliaDownloadAsync(baseRoot, pickedBranch, version, null);
+                        ShowHeader();
+                        SetHint("<version>  or  <branch>  or  <branch -b>");
                         found = true;
                         break;
                     }
@@ -895,18 +1351,20 @@ namespace StrinowaWPF
                 }
 
                 var (nb, nv, ns, gb2, lb2) = ParseBranchLine(dlChoice);
-                if (lb2 && nb != null) { await RunBruteforceLauncherAsync(nb); ShowHeader(); continue; }
-                if (gb2 && nb != null) { await RunBruteforceAsync(nb); ShowHeader(); continue; }
+                if (gb2 && nb != null) { BruteChannelBox.Text = nb; await RunAdvancedBruteforceFromUiAsync(); ShowHeader(); continue; }
                 if (nb != null)
                 {
                     ShowHeader();
-                    ctx = await ScanBranchAsync(nb, ns, nv);
+                    ctx = nb.Equals("Game_All", StringComparison.OrdinalIgnoreCase) ||
+                          nb.Equals("Launcher_All", StringComparison.OrdinalIgnoreCase)
+                        ? await ScanAllBranchesAsync(nb.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher" : "Game", ns)
+                        : await ScanBranchAsync(nb, ns, nv);
                     if (ctx == null) { ShowHeader(); break; }
-                    SetHint("<version>  or  <branch>  or  <branch -b>  or  <branch -lb>");
+                    SetHint("<version>  or  <branch>  or  <branch -b>");
                     continue;
                 }
 
-                AppendText("  Invalid input. Enter a version like '1.2.3.4', a branch like 'Game_Test OS', or add -b / -lb.", TC.Warn);
+                AppendText("  Invalid input. Enter a version like '1.2.3.4', a branch like 'Game_Test OS', or add -b.", TC.Warn);
             }
         }
 
@@ -948,30 +1406,36 @@ namespace StrinowaWPF
             AppendLine(new TermSpan[]
             {
         new("  Game_<Channel> -b", TC.Release, true),
-        new("  → Run ", TC.Dim),
+        new("  â†’ Run ", TC.Dim),
         new("game bruteforce", TC.Info, true)
             });
 
             AppendLine(new TermSpan[]
             {
-        new("  Launcher_<Channel> -lb", TC.Release, true),
-        new("  → Run ", TC.Dim),
-        new("launcher bruteforce", TC.Info, true)
+        new("  Game_<Channel> -b", TC.Release, true),
+        new("  â†’ Run ", TC.Dim),
+        new("advanced bruteforce panel", TC.Info, true)
             });
 
             AppendLine(new TermSpan[]
             {
         new("  Game_<Channel> CN", TC.Release, true),
-        new("  → Scan ", TC.Dim),
+        new("  â†’ Scan ", TC.Dim),
         new("CN builds for that branch", TC.Info)
             });
 
             AppendLine(new TermSpan[]
             {
         new("  Game_<Channel> <Version>", TC.Release, true),
-        new("  → Scan for a ", TC.Dim),
+        new("  â†’ Scan for a ", TC.Dim),
         new("hidden version", TC.Info, true),
         new(" on that branch", TC.Dim)
+            });
+
+            AppendLine(new TermSpan[]
+            {
+        new("  Game_All / Launcher_All", TC.Release, true),
+        new("  â†’ Merge every known branch with dates and matches", TC.Dim)
             });
 
             AppendLine([]);
@@ -981,7 +1445,312 @@ namespace StrinowaWPF
         new("  You can also paste a direct URL to download files.", TC.Dim)
             });
 
+            AppendLine(new TermSpan[]
+            {
+        new("  Confirmed downloads run in the background, so you can start another build immediately.", TC.Dim)
+            });
+
             AppendLine([]);
+        }
+
+        async Task<ScanContext?> ScanAllBranchesAsync(string mode, string? allowedSource)
+        {
+            var sourceCodes = allowedSource?.ToLowerInvariant() switch
+            {
+                "os" => new[] { "OS" },
+                "cn" => new[] { "CN", "QQ" },
+                "pc" => new[] { "PC" },
+                "qq" => new[] { "QQ" },
+                _ => new[] { "OS", "CN", "PC", "QQ" },
+            };
+            var branchJobs = sourceCodes
+                .SelectMany(source => BranchCatalog.Get(source, mode).Select(branch => (source, branch)))
+                .Distinct().ToList();
+            var publicEntries = new List<AllBuildSeed>();
+            var publicKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var gate = new object();
+            var started = Stopwatch.StartNew();
+            var completed = 0;
+
+            ShowLoader($"Manifesting branches [0/{branchJobs.Count}]  ETA --:--");
+            await Parallel.ForEachAsync(branchJobs,
+                new ParallelOptions { MaxDegreeOfParallelism = 16 },
+                async (job, _) =>
+                {
+                    var root = RootForSource(job.source);
+                    var (versions, reverse) = await GetVersionsQuietAsync($"{root}/{job.branch}/manifest.txt");
+                    lock (gate)
+                    {
+                        foreach (var version in versions)
+                        {
+                            var resolved = mode.Equals("Launcher", StringComparison.OrdinalIgnoreCase)
+                                ? job.branch
+                                : reverse.TryGetValue(version, out var choices) && choices.Count > 0
+                                    ? choices.FirstOrDefault(value => value.Equals(job.branch, StringComparison.OrdinalIgnoreCase)) ?? choices.First()
+                                    : job.branch;
+                            var key = $"{job.source}|{job.branch}|{version}";
+                            if (!publicKeys.Add(key)) continue;
+                            publicEntries.Add(new AllBuildSeed(version, job.branch, resolved, job.source, false));
+                        }
+                    }
+                    var done = Interlocked.Increment(ref completed);
+                    var remaining = TimeSpan.FromTicks((long)(started.Elapsed.Ticks *
+                        Math.Max(0, branchJobs.Count - done) / (double)Math.Max(1, done)));
+                    UpdateLoaderProgress(done, branchJobs.Count,
+                        $"Manifesting branches [{done}/{branchJobs.Count}]  ETA {FormatEta(remaining)}");
+                });
+            HideLoader();
+
+            var seeds = new List<AllBuildSeed>(publicEntries);
+            if (_cfg.DispatchWinBuild)
+            {
+                foreach (var entry in WinBuildCatalog.Load())
+                {
+                    if (!entry.Mode.Equals(mode, StringComparison.OrdinalIgnoreCase) ||
+                        !sourceCodes.Contains(entry.Source, StringComparer.OrdinalIgnoreCase)) continue;
+                    var key = $"{entry.Source}|{entry.Branch}|{entry.Version}";
+                    if (publicKeys.Contains(key)) continue;
+                    seeds.Add(new AllBuildSeed(entry.Version, entry.Branch, entry.Branch, entry.Source, true));
+                }
+            }
+
+            seeds = seeds.DistinctBy(seed =>
+                $"{seed.Source}|{seed.DisplayBranch}|{seed.Version}", StringComparer.OrdinalIgnoreCase).ToList();
+            if (seeds.Count == 0)
+            {
+                AppendText($"  No {mode.ToLowerInvariant()} builds were found.", TC.Warn);
+                return null;
+            }
+
+            var probes = new ConcurrentDictionary<string, Lazy<Task<AllBuildProbe>>>(StringComparer.OrdinalIgnoreCase);
+            var occurrences = new ConcurrentBag<AllBuildOccurrence>();
+            started.Restart();
+            completed = 0;
+            ShowLoader($"Identifying builds [0/{seeds.Count}]  ETA --:--");
+            await Parallel.ForEachAsync(seeds,
+                new ParallelOptions { MaxDegreeOfParallelism = 32 },
+                async (seed, _) =>
+                {
+                    var probeKey = $"{seed.Source}|{seed.ResolvedBranch}|{seed.Version}|{mode}";
+                    var lazy = probes.GetOrAdd(probeKey, _ => new Lazy<Task<AllBuildProbe>>(
+                        () => ProbeAllBuildAsync(seed.Source, seed.ResolvedBranch, seed.Version, mode),
+                        LazyThreadSafetyMode.ExecutionAndPublication));
+                    var probe = await lazy.Value;
+                    if (!seed.Hidden || probe.Exists)
+                        occurrences.Add(new AllBuildOccurrence(seed, probe));
+                    var done = Interlocked.Increment(ref completed);
+                    var remaining = TimeSpan.FromTicks((long)(started.Elapsed.Ticks *
+                        Math.Max(0, seeds.Count - done) / (double)Math.Max(1, done)));
+                    UpdateLoaderProgress(done, seeds.Count,
+                        $"Identifying builds [{done}/{seeds.Count}]  ETA {FormatEta(remaining)}");
+                });
+            HideLoader();
+
+            var found = occurrences.ToList();
+            if (found.Count == 0)
+            {
+                AppendText($"  No valid {mode.ToLowerInvariant()} builds were found.", TC.Warn);
+                return null;
+            }
+
+            var maps = BuildAllContextMaps(found);
+            foreach (var region in new[] { "OS", "CN" })
+            {
+                var regionBuilds = region == "OS"
+                    ? found.Where(item => item.Seed.Source == "OS").ToList()
+                    : found.Where(item => item.Seed.Source != "OS").ToList();
+                if (!_cfg.ShowDevkits)
+                    regionBuilds = regionBuilds.Where(item => !IsDevkitType(item.Probe.Type)).ToList();
+                if (regionBuilds.Count == 0) continue;
+
+                var groups = regionBuilds.GroupBy(item => item.Seed.Version, StringComparer.OrdinalIgnoreCase)
+                    .Select(group =>
+                    {
+                        var ordered = group.OrderBy(item => item.Probe.Exists ? 0 : 1)
+                            .ThenBy(item => item.Probe.Date ?? DateTime.MaxValue)
+                            .ThenBy(item => item.Seed.Source == "CN" ? 0 : item.Seed.Source == "PC" ? 1 : 2)
+                            .ToList();
+                        var branches = group.Select(item => BranchCatalog.ShortName(item.Seed.DisplayBranch))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+                        var dated = group.Where(item => item.Probe.Date.HasValue)
+                            .Select(item => item.Probe.Date!.Value).ToList();
+                        return new AllBuildGroup(group.Key, ordered[0], branches,
+                            group.All(item => item.Seed.Hidden), group.Any(item => item.Probe.Exists),
+                            dated.Count == 0 ? null : dated.Min());
+                    })
+                    .OrderBy(group => group.Exists ? 1 : 0)
+                    .ThenBy(group => group.Date ?? DateTime.MaxValue)
+                    .ThenBy(group => group.Version, new VersionComparer()).ToList();
+
+                AppendLine([]);
+                var regionName = region == "OS" ? "OS Strinowa" : "CN Strinowa";
+                AppendLine([new($"  {regionName} {mode} All builds ({groups.Count}):", TC.Bold, true)]);
+                var width = groups.Max(group => group.Version.Length) + 2;
+                var tagWidth = groups.Max(group =>
+                    (group.Branches.Count > 1 ? "[Multi]" : $"[{group.Branches[0]}]").Length) + 2;
+                foreach (var group in groups)
+                {
+                    var primary = group.Primary;
+                    var tag = group.Branches.Count > 1 ? "Multi" : group.Branches[0];
+                    var tagText = $"[{tag}]";
+                    var color = !group.Exists ? TC.Deprecated : primary.Probe.Type == "Devkit"
+                        ? TC.Devkit : region == "OS" ? TC.Release : TC.Normal;
+                    var date = group.Date.HasValue
+                        ? group.Date.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "—";
+                    var line = new List<TermSpan>
+                    {
+                        new("  ", TC.Normal),
+                        new(group.Version.PadRight(width), color),
+                        new($"  {tagText.PadRight(tagWidth)}", color),
+                    };
+                    if (group.Date.HasValue) line.Add(new($"  {date}", TC.Dim));
+                    var root = RootForSource(primary.Seed.Source);
+                    AppendClickableLine(line, $"dl {group.Version} {primary.Seed.Source.ToLowerInvariant()}",
+                        BuildFileListUrl(root, primary.Seed.ResolvedBranch, group.Version), group.Hidden, group.Branches);
+                }
+            }
+
+            var context = new ScanContext($"{mode}_All", allowedSource, null, maps,
+                BuildAllDownloadChoices(found));
+            _lastScanCtx = context;
+            return context;
+        }
+
+        static string RootForSource(string source) => source.ToUpperInvariant() switch
+        {
+            "OS" => OS_ROOT,
+            "CN" => CN_ALL_ROOT,
+            "PC" => PC_ROOT,
+            _ => QQ_ROOT,
+        };
+
+        static string FormatEta(TimeSpan value) => value.TotalHours >= 1
+            ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
+            : $"{value.Minutes:00}:{value.Seconds:00}";
+
+        async Task<(List<string> vers, Dictionary<string, HashSet<string>> revmap)> GetVersionsQuietAsync(string url)
+        {
+            try
+            {
+                var text = await Http.GetStringAsync(url);
+                if (string.IsNullOrWhiteSpace(text) || text.Contains("NoSuchKey") || text.Contains("does not exist"))
+                    return ([], new Dictionary<string, HashSet<string>>());
+                return ParseIndexText(text);
+            }
+            catch
+            {
+                return ([], new Dictionary<string, HashSet<string>>());
+            }
+        }
+
+        async Task<AllBuildProbe> ProbeAllBuildAsync(string source, string branch, string version, string mode)
+        {
+            var root = RootForSource(source);
+            if (mode.Equals("Launcher", StringComparison.OrdinalIgnoreCase))
+            {
+                var launcherName = branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
+                    ? branch["Launcher_".Length..] : branch;
+                var installerPrefix = source.Equals("OS", StringComparison.OrdinalIgnoreCase) ? "Strinova" : "Calabiyau";
+                var archiveUrl = $"{root}/{branch}/{version}/full_{version}.7z";
+                var installerUrl = $"{root}/{branch}/{version}/{installerPrefix}_Installer_{launcherName}_{version}.exe";
+                var archiveTask = ProbeUrlAsync(archiveUrl);
+                var installerTask = ProbeUrlAsync(installerUrl);
+                await Task.WhenAll(archiveTask, installerTask);
+                var archive = archiveTask.Result;
+                var installer = installerTask.Result;
+                var dates = new[] { archive.ts, installer.ts }.Where(date => date.HasValue)
+                    .Select(date => date!.Value).ToList();
+                if (dates.Count == 0)
+                    dates.AddRange(await ProbeBuildDateFallbacksAsync(root, branch, version));
+                return new AllBuildProbe(archive.ok || installer.ok,
+                    dates.Count == 0 ? null : dates.Min(), "Release");
+            }
+
+            var (exists, date) = await ProbeUrlAsync(BuildFileListUrl(root, branch, version));
+            if (!date.HasValue)
+            {
+                var dates = await ProbeBuildDateFallbacksAsync(root, branch, version);
+                date = dates.Count == 0 ? null : dates.Min();
+            }
+            return new AllBuildProbe(exists, date, "Release");
+        }
+
+        async Task<List<DateTime>> ProbeBuildDateFallbacksAsync(string root, string branch, string version)
+        {
+            var versionManifest = ProbeUrlAsync($"{root}/{branch}/{version}/manifest.txt");
+            var hiddenManifest = ProbeUrlAsync($"{root}/{branch}/manifest.txt_{version}");
+            await Task.WhenAll(versionManifest, hiddenManifest);
+            return new[] { versionManifest.Result.ts, hiddenManifest.Result.ts }
+                .Where(date => date.HasValue).Select(date => date!.Value).ToList();
+        }
+
+        Dictionary<string, (string root, List<string> vers, Dictionary<string, string> types,
+            Dictionary<string, DateTime?> dates, Dictionary<string, bool> exists,
+            Dictionary<string, string> choice)> BuildAllContextMaps(List<AllBuildOccurrence> occurrences)
+        {
+            var maps = new Dictionary<string, (string root, List<string> vers, Dictionary<string, string> types,
+                Dictionary<string, DateTime?> dates, Dictionary<string, bool> exists,
+                Dictionary<string, string> choice)>();
+            foreach (var sourceGroup in occurrences.GroupBy(item => item.Seed.Source, StringComparer.OrdinalIgnoreCase))
+            {
+                var versions = new List<string>();
+                var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var dates = new Dictionary<string, DateTime?>(StringComparer.OrdinalIgnoreCase);
+                var exists = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                var choice = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var versionGroup in sourceGroup.GroupBy(item => item.Seed.Version, StringComparer.OrdinalIgnoreCase))
+                {
+                    var primary = versionGroup.OrderBy(item => item.Probe.Exists ? 0 : 1)
+                        .ThenBy(item => item.Probe.Date ?? DateTime.MaxValue).First();
+                    versions.Add(versionGroup.Key);
+                    types[versionGroup.Key] = primary.Probe.Type;
+                    var dated = versionGroup.Where(item => item.Probe.Date.HasValue)
+                        .Select(item => item.Probe.Date!.Value).ToList();
+                    dates[versionGroup.Key] = dated.Count == 0 ? null : dated.Min();
+                    exists[versionGroup.Key] = versionGroup.Any(item => item.Probe.Exists);
+                    choice[versionGroup.Key] = primary.Seed.ResolvedBranch;
+                }
+                maps[sourceGroup.Key] = (RootForSource(sourceGroup.Key), versions, types, dates, exists, choice);
+            }
+            return maps;
+        }
+
+        static string MultiChoiceKey(string version, string source) =>
+            $"{(source.Equals("OS", StringComparison.OrdinalIgnoreCase) ? "OS" : "CN")}|{version}";
+
+        Dictionary<string, List<AllDownloadChoice>> BuildAllDownloadChoices(List<AllBuildOccurrence> occurrences)
+        {
+            var result = new Dictionary<string, List<AllDownloadChoice>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var regionGroup in occurrences.GroupBy(item =>
+                         item.Seed.Source.Equals("OS", StringComparison.OrdinalIgnoreCase) ? "OS" : "CN"))
+            {
+                foreach (var versionGroup in regionGroup.GroupBy(item => item.Seed.Version, StringComparer.OrdinalIgnoreCase))
+                {
+                    var choices = versionGroup
+                        .GroupBy(item => item.Seed.DisplayBranch, StringComparer.OrdinalIgnoreCase)
+                        .Select(branchGroup =>
+                        {
+                            var primary = branchGroup.OrderBy(item => item.Probe.Exists ? 0 : 1)
+                                .ThenBy(item => item.Probe.Date ?? DateTime.MaxValue)
+                                .ThenBy(item => item.Seed.Source == "CN" ? 0 : item.Seed.Source == "PC" ? 1 : 2)
+                                .First();
+                            var dates = branchGroup.Where(item => item.Probe.Date.HasValue)
+                                .Select(item => item.Probe.Date!.Value).ToList();
+                            return new AllDownloadChoice(primary.Seed.Version, primary.Seed.DisplayBranch,
+                                primary.Seed.ResolvedBranch, primary.Seed.Source,
+                                dates.Count == 0 ? null : dates.Min(),
+                                branchGroup.Any(item => item.Seed.Hidden),
+                                branchGroup.Any(item => item.Probe.Exists), null);
+                        })
+                        .OrderBy(choice => choice.Date ?? DateTime.MaxValue)
+                        .ThenBy(choice => choice.DisplayBranch, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    if (choices.Count > 1)
+                        result[$"{regionGroup.Key}|{versionGroup.Key}"] = choices;
+                }
+            }
+            return result;
         }
 
         async Task<ScanContext?> ScanBranchAsync(string branch, string? allowedSource, string? hiddenVersion)
@@ -1009,6 +1778,16 @@ namespace StrinowaWPF
                         : GetVersionsAsync($"{QQ_ROOT}/{branch}/manifest.txt"))
                     : Task.FromResult((new List<string>(), new Dictionary<string, HashSet<string>>())),
             };
+            var publicManifestTasks = new Dictionary<string, Task<(List<string> vers, Dictionary<string, HashSet<string>> revmap)>>();
+            if (hiddenVersion != null)
+            {
+                foreach (var code in new[] { "OS", "CN", "PC", "QQ" })
+                {
+                    if (allowedSource != null && !code.Equals(allowedSource, StringComparison.OrdinalIgnoreCase)) continue;
+                    var root = code switch { "OS" => OS_ROOT, "CN" => CN_ROOT, "PC" => PC_ROOT, _ => QQ_ROOT };
+                    publicManifestTasks[code] = GetVersionsAsync($"{root}/{branch}/manifest.txt");
+                }
+            }
 
             int totalSteps = tasks.Count;
             int step = 0;
@@ -1023,6 +1802,35 @@ namespace StrinowaWPF
             HideLoader();
 
             var results = tasks.ToDictionary(kv => kv.Key, kv => kv.Value.Result);
+            if (publicManifestTasks.Count > 0) await Task.WhenAll(publicManifestTasks.Values);
+            var publicVersions = results.ToDictionary(
+                pair => pair.Key,
+                pair => new HashSet<string>(
+                    publicManifestTasks.TryGetValue(pair.Key, out var publicTask)
+                        ? publicTask.Result.vers
+                        : pair.Value.vers,
+                    StringComparer.OrdinalIgnoreCase));
+            var hiddenBySource = results.Keys.ToDictionary(
+                code => code,
+                _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            var mode = branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher" : "Game";
+
+            foreach (var entry in _cfg.DispatchWinBuild ? WinBuildCatalog.Load() : [])
+            {
+                if (!entry.Branch.Equals(branch, StringComparison.OrdinalIgnoreCase) ||
+                    !entry.Mode.Equals(mode, StringComparison.OrdinalIgnoreCase) ||
+                    !results.TryGetValue(entry.Source, out var result) ||
+                    allowedSource != null && !entry.Source.Equals(allowedSource, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!result.vers.Contains(entry.Version, StringComparer.OrdinalIgnoreCase))
+                    result.vers.Add(entry.Version);
+                if (!result.revmap.TryGetValue(entry.Version, out var branches))
+                    result.revmap[entry.Version] = branches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                branches.Add(entry.Branch);
+                if (!publicVersions[entry.Source].Contains(entry.Version))
+                    hiddenBySource[entry.Source].Add(entry.Version);
+            }
 
             bool anyFound = results.Values.Any(r => r.vers.Count > 0);
             if (!anyFound)
@@ -1062,10 +1870,6 @@ namespace StrinowaWPF
                 await Task.WhenAll(buildTasks.Values);
                 HideLoader();
             }
-            SetStatusLine($"  {Strings.Get("compiling")}");
-            await Task.Delay(200);
-            ClearStatusLine();
-
             var maps = new Dictionary<string, (string root, List<string> vers, Dictionary<string, string> types,
                 Dictionary<string, DateTime?> dates, Dictionary<string, bool> exists, Dictionary<string, string> choice)>();
 
@@ -1081,6 +1885,59 @@ namespace StrinowaWPF
                 }
             }
 
+            Dictionary<string, ChinaBuildStatus>? chinaBuilds = null;
+            if (!branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) &&
+                (results["CN"].vers.Count > 0 || results["PC"].vers.Count > 0))
+            {
+                chinaBuilds = new Dictionary<string, ChinaBuildStatus>(StringComparer.OrdinalIgnoreCase);
+                var chinaVersions = results["CN"].vers.Concat(results["PC"].vers)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var chinaGate = new object();
+                await Parallel.ForEachAsync(chinaVersions,
+                    new ParallelOptions { MaxDegreeOfParallelism = 32 },
+                    async (version, _) =>
+                    {
+                        var cnKnown = maps.TryGetValue("CN", out var cnMap) && cnMap.exists.ContainsKey(version);
+                        var pcKnown = maps.TryGetValue("PC", out var pcMap) && pcMap.exists.ContainsKey(version);
+                        var cnExists = cnKnown && cnMap.exists.GetValueOrDefault(version);
+                        var pcExists = pcKnown && pcMap.exists.GetValueOrDefault(version);
+                        var cnDate = cnKnown ? cnMap.dates.GetValueOrDefault(version) : null;
+                        var pcDate = pcKnown ? pcMap.dates.GetValueOrDefault(version) : null;
+                        var resolvedBranch = cnKnown
+                            ? cnMap.choice.GetValueOrDefault(version, branch)
+                            : pcKnown ? pcMap.choice.GetValueOrDefault(version, branch) : branch;
+
+                        if (!cnKnown)
+                            (cnExists, cnDate) = await ProbeUrlAsync(BuildFileListUrl(CN_ROOT, resolvedBranch, version));
+                        if (!pcKnown)
+                            (pcExists, pcDate) = await ProbeUrlAsync(BuildFileListUrl(PC_ROOT, resolvedBranch, version));
+
+                        var dates = new[] { cnExists ? cnDate : null, pcExists ? pcDate : null }
+                            .Where(date => date.HasValue).Select(date => date!.Value).ToList();
+                        var status = new ChinaBuildStatus(cnExists || pcExists,
+                            dates.Count == 0 ? null : dates.Min());
+                        lock (chinaGate) chinaBuilds[version] = status;
+                    });
+
+                foreach (var code in new[] { "CN", "PC" })
+                {
+                    if (!maps.TryGetValue(code, out var map)) continue;
+                    foreach (var version in map.vers)
+                        if (chinaBuilds.TryGetValue(version, out var status)) map.dates[version] = status.Date;
+                }
+            }
+
+            foreach (var code in new[] { "OS", "CN", "PC", "QQ" })
+            {
+                if (!maps.TryGetValue(code, out var map)) continue;
+                map.vers.RemoveAll(version => hiddenBySource[code].Contains(version) &&
+                    !(chinaBuilds != null && (code == "CN" || code == "PC")
+                        ? chinaBuilds.GetValueOrDefault(version)?.Exists == true
+                        : map.exists.GetValueOrDefault(version)));
+                hiddenBySource[code].RemoveWhere(version =>
+                    !map.vers.Contains(version, StringComparer.OrdinalIgnoreCase));
+            }
+
             AppendLine([]);
 
             var os = results["OS"].vers;
@@ -1091,7 +1948,8 @@ namespace StrinowaWPF
                 && os.Count > 0 && maps.ContainsKey("OS"))
             {
                 var m = maps["OS"];
-                PrintVersionGroup($"OS {branch}", os, m.types, m.dates, m.exists, branch, "OS");
+                PrintVersionGroup($"OS {branch}", os, m.types, m.dates, m.exists,
+                    branch, m.root, m.choice, "OS", hiddenBySource["OS"]);
             }
             if ((allowedSource == null || allowedSource == "pc" || allowedSource == "cn")
                 && (pc.Count > 0 || cn.Count > 0))
@@ -1099,14 +1957,37 @@ namespace StrinowaWPF
                 if (pc.Count > 0 && maps.ContainsKey("PC"))
                 {
                     var mpc = maps["PC"];
-                    var merged = pc.Concat(cn).Distinct().OrderBy(v => v, new VersionComparer()).ToList();
-
+                    maps.TryGetValue("CN", out var mcnEntry);
+                    var merged = pc.Concat(cn).Distinct().Where(v =>
+                    {
+                        var type = mcnEntry.types != null && mcnEntry.types.ContainsKey(v)
+                            ? mcnEntry.types[v]
+                            : mpc.types.GetValueOrDefault(v, "Devkit");
+                        return _cfg.ShowDevkits || !IsDevkitType(type);
+                    }).ToList();
+                    if (merged.Count > 0)
+                    {
                     var mergeTitle = $"{Strings.Get("china_client")} {(branch.StartsWith("Game_", StringComparison.OrdinalIgnoreCase) ? branch[5..] : branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher " + branch[9..] : branch)}";
                     AppendLine([]);
                     AppendLine([new($"  {mergeTitle} {Strings.Get("builds")} ({merged.Count}):", TC.Bold, true)]);
 
                     int colW = merged.Max(v => v.Length) + 2;
-                    maps.TryGetValue("CN", out var mcnEntry);
+
+                    DateTime? MergedDate(string version) =>
+                        chinaBuilds?.GetValueOrDefault(version)?.Date ??
+                        (mcnEntry.dates != null && mcnEntry.dates.ContainsKey(version)
+                            ? mcnEntry.dates[version]
+                            : mpc.dates.GetValueOrDefault(version));
+                    bool MergedExists(string version) =>
+                        chinaBuilds?.GetValueOrDefault(version)?.Exists ??
+                        (mpc.exists.ContainsKey(version)
+                            ? mpc.exists[version]
+                            : mcnEntry.exists == null || !mcnEntry.exists.ContainsKey(version) || mcnEntry.exists[version]);
+                    merged = merged
+                        .OrderBy(v => MergedExists(v) ? 1 : 0)
+                        .ThenBy(v => MergedDate(v) ?? DateTime.MaxValue)
+                        .ThenBy(v => v, new VersionComparer())
+                        .ToList();
 
                     foreach (var v in merged)
                     {
@@ -1117,15 +1998,9 @@ namespace StrinowaWPF
                             mpc.types.GetValueOrDefault(v, "Devkit");
                         if (type == "Development") type = "Devkit";
 
-                        var date =
-                            mcnEntry.dates != null && mcnEntry.dates.ContainsKey(v) ? mcnEntry.dates[v] :
-                            mpc.dates.GetValueOrDefault(v);
+                        var date = MergedDate(v);
 
-                        var exists =
-                            mpc.exists.ContainsKey(v)
-                                ? mpc.exists[v]
-                                : (mcnEntry.exists != null && mcnEntry.exists.ContainsKey(v)
-                                    ? mcnEntry.exists[v] : true);
+                        var exists = MergedExists(v);
 
                         SolidColorBrush color;
                         if (!exists) color = TC.Deprecated;
@@ -1133,7 +2008,7 @@ namespace StrinowaWPF
                         else if (inCN) color = TC.Normal;
                         else color = TC.CN;
 
-                        var dtStr = date.HasValue ? date.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "—";
+                        var dtStr = date.HasValue ? date.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "â€”";
                         var tag = !exists ? $"[{Strings.Get("removed")}]" : $"[{type}]";
 
                         var line = new List<TermSpan>
@@ -1146,13 +2021,21 @@ namespace StrinowaWPF
                             line.Add(new($"  {dtStr}", TC.Dim));
 
                         var dlSrc = inCN ? "cn" : "pc";
-                        AppendClickableLine(line, $"dl {v} {dlSrc}");
+                        var sourceEntry = inCN && !string.IsNullOrEmpty(mcnEntry.root) ? mcnEntry : mpc;
+                        var resolvedBranch = sourceEntry.choice != null
+                            ? sourceEntry.choice.GetValueOrDefault(v, branch)
+                            : branch;
+                        var hiddenBuild = !publicVersions["CN"].Contains(v) && !publicVersions["PC"].Contains(v);
+                        AppendClickableLine(line, $"dl {v} {dlSrc}",
+                            BuildFileListUrl(sourceEntry.root, resolvedBranch, v), hiddenBuild);
+                    }
                     }
                 }
                 else if (cn.Count > 0 && maps.ContainsKey("CN"))
                 {
                     var mcn = maps["CN"];
-                    PrintVersionGroup(branch, cn, mcn.types, mcn.dates, mcn.exists, branch, "CN");
+                    PrintVersionGroup(branch, cn, mcn.types, mcn.dates, mcn.exists,
+                        branch, mcn.root, mcn.choice, "CN", hiddenBySource["CN"]);
                 }
             }
 
@@ -1201,10 +2084,19 @@ namespace StrinowaWPF
             return $"{region} {stripped}";
         }
 
+        static bool IsDevkitType(string? type) =>
+            type?.Equals("Devkit", StringComparison.OrdinalIgnoreCase) == true ||
+            type?.Equals("Development", StringComparison.OrdinalIgnoreCase) == true;
+
         void PrintVersionGroup(string label, List<string> versions, Dictionary<string, string> types,
             Dictionary<string, DateTime?> dates, Dictionary<string, bool> exists, string branch,
-            string source = "OS")
+            string root, Dictionary<string, string> choice, string source = "OS",
+            HashSet<string>? hiddenVersions = null)
         {
+            if (!_cfg.ShowDevkits)
+                versions = versions.Where(v => !IsDevkitType(types.GetValueOrDefault(v, "Devkit"))).ToList();
+            if (versions.Count == 0) return;
+
             SolidColorBrush sourceColor = source.ToUpper() switch
             {
                 "CN" => TC.Normal,
@@ -1219,8 +2111,13 @@ namespace StrinowaWPF
             AppendLine([]);
             AppendLine([new($"  {prettyName} {buildsWord} ({versions.Count}):", TC.Bold, true)]);
 
-            var colW = versions.Max(v => v.Length) + 2;
-            foreach (var v in versions)
+            var orderedVersions = versions
+                .OrderBy(v => exists.TryGetValue(v, out var present) && !present ? 0 : 1)
+                .ThenBy(v => dates.GetValueOrDefault(v) ?? DateTime.MaxValue)
+                .ThenBy(v => v, new VersionComparer())
+                .ToList();
+            var colW = orderedVersions.Max(v => v.Length) + 2;
+            foreach (var v in orderedVersions)
             {
                 var t = types.GetValueOrDefault(v, "Devkit");
                 if (t == "Development") t = "Devkit";
@@ -1232,7 +2129,7 @@ namespace StrinowaWPF
                 else color = sourceColor;
 
                 var dt = dates.GetValueOrDefault(v);
-                var dtStr = dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "—";
+                var dtStr = dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") : "â€”";
                 var tag = removed ? $"[{Strings.Get("removed")}]" : $"[{t}]";
 
                 var line = new List<TermSpan>
@@ -1244,7 +2141,9 @@ namespace StrinowaWPF
                 if (!removed)
                     line.Add(new($"  {dtStr}", TC.Dim));
 
-                AppendClickableLine(line, $"dl {v} {source.ToLower()}");
+                var resolvedBranch = choice.GetValueOrDefault(v, branch);
+                AppendClickableLine(line, $"dl {v} {source.ToLower()}",
+                    BuildFileListUrl(root, resolvedBranch, v), hiddenVersions?.Contains(v) == true);
             }
         }
 
@@ -1271,7 +2170,7 @@ namespace StrinowaWPF
             var lk = new object();
 
             await Parallel.ForEachAsync(versions,
-                new ParallelOptions { MaxDegreeOfParallelism = 16 },
+                new ParallelOptions { MaxDegreeOfParallelism = 32 },
                 async (v, ct) =>
                 {
                     if (branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase))
@@ -1337,11 +2236,14 @@ namespace StrinowaWPF
             return new BuildResult(types, dates, exists, choice);
         }
 
-        async Task CeciliaDownloadAsync(string baseRoot, string branch, string version, string? manifestTextOpt)
+        async Task CeciliaDownloadAsync(string baseRoot, string branch, string version,
+            string? manifestTextOpt, bool skipConfirmation = false)
         {
+            var downloadRegion = baseRoot.Equals(OS_ROOT, StringComparison.OrdinalIgnoreCase) ? "OS" : "CN";
+            var versionDirectory = $"{downloadRegion}_{branch}-{version}";
+            ShowDownloadPreparation($"Preparing {branch} {version}", "Checking download files…");
             if (branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase))
             {
-                // Launcher manifests list /Launcher/<ver>/..., but CDN downloads live directly under the launcher branch.
                 var launcherName = branch["Launcher_".Length..];
                 var installerPrefix = baseRoot.Equals(OS_ROOT, StringComparison.OrdinalIgnoreCase) ? "Strinova" : "Calabiyau";
                 var exeFileName = $"{installerPrefix}_Installer_{launcherName}_{version}.exe";
@@ -1352,62 +2254,54 @@ namespace StrinowaWPF
 
                 if (!has7z && !hasExe)
                 {
-                    AppendText($"  Launcher {version} is not available on this CDN.", TC.Warn);
+                    RestoreDownloadPanelAfterPreparation();
+                    ShowClipboardToast("This version is inaccessible or has been deleted");
                     return;
                 }
 
-                bool dl7z = false, dlExe = false;
-                if (AppSettings.LauncherFormatAsked)
+                ShowDownloadPreparation($"Preparing {branch} {version}", "Reading file sizes…");
+                var lSz = has7z ? await HeadSizeAsync(lUrl7z) : null;
+                var eSz = hasExe ? await HeadSizeAsync(lUrlExe) : null;
+                bool dl7z;
+                bool dlExe;
+                if (skipConfirmation)
                 {
-                    dl7z = AppSettings.LauncherDefault7z && has7z;
-                    dlExe = AppSettings.LauncherDefaultExe && hasExe;
-                    if (!dl7z && !dlExe) dl7z = has7z;
+                    dl7z = has7z && AppSettings.LauncherDefault7z;
+                    dlExe = hasExe && AppSettings.LauncherDefaultExe;
+                    if (!dl7z && !dlExe)
+                    {
+                        dl7z = has7z;
+                        dlExe = !has7z && hasExe;
+                    }
                 }
                 else
                 {
-                    AppendLine([new($"  Launcher {version} — select format:", TC.Normal)]);
-                    if (has7z) AppendLine([new("    [1]  7z archive", TC.Release)]);
-                    if (hasExe) AppendLine([new("    [2]  EXE installer", TC.Release)]);
-                    if (has7z && hasExe) AppendLine([new("    [3]  Both", TC.Dim)]);
-                    var pick = (await AskInput("  choice >")).Trim();
-                    dl7z = pick is "1" or "3" || (!hasExe && has7z);
-                    dlExe = pick is "2" or "3" || (!has7z && hasExe);
-                    if (!dl7z && !dlExe) { AppendText("  Cancelled.", TC.Dim); return; }
+                    var selection = await ConfirmLauncherDownloadInPanelAsync(
+                        $"Download {branch} {version}", has7z, lSz, hasExe, eSz);
+                    if (!selection.Confirmed) return;
+                    dl7z = selection.Download7z;
+                    dlExe = selection.DownloadExe;
                 }
 
+                var launcherDownloads = new List<(string key, string label, string url, string dest, long size, string description)>();
                 if (dl7z && has7z)
                 {
-                    var lSz = await HeadSizeAsync(lUrl7z);
-                    if (!await AskYesNo($"Download {branch} {version} 7z ({FormatSize(lSz)})?", defaultNo: true))
-                    { AppendText("  Cancelled.", TC.Dim); }
-                    else
-                    {
-                        var dest = Path.Combine($"{branch}-{version}", $"full_{version}.7z");
-                        Directory.CreateDirectory($"{branch}-{version}");
-                        StartDlBar($"Downloading {version}.7z", lSz ?? 0, 1);
-                        await DownloadFileAsync(lUrl7z, dest, null);
-                        StopDlBar();
-                        AppendText($"  Saved \u2192 {dest}", TC.Ok);
-                    }
+                    var dest = Path.Combine("Launcher", versionDirectory, $"full_{version}.7z");
+                    launcherDownloads.Add(($"launcher|{lUrl7z}", $"Downloading {version}.7z",
+                        lUrl7z, dest, lSz ?? 0, $"7z {FormatSize(lSz)}"));
                 }
                 if (dlExe && hasExe)
                 {
-                    var eSz = await HeadSizeAsync(lUrlExe);
-                    if (!await AskYesNo($"Download {branch} {version} EXE ({FormatSize(eSz)})?", defaultNo: true))
-                    { AppendText("  Cancelled (EXE).", TC.Dim); }
-                    else
-                    {
-                        var dest = Path.Combine($"{branch}-{version}", exeFileName);
-                        Directory.CreateDirectory($"{branch}-{version}");
-                        StartDlBar($"Downloading {exeFileName}", eSz ?? 0, 1);
-                        await DownloadFileAsync(lUrlExe, dest, null);
-                        StopDlBar();
-                        AppendText($"  Saved \u2192 {dest}", TC.Ok);
-                    }
+                    var dest = Path.Combine("Launcher", versionDirectory, exeFileName);
+                    launcherDownloads.Add(($"launcher|{lUrlExe}", $"Downloading {exeFileName}",
+                        lUrlExe, dest, eSz ?? 0, $"EXE {FormatSize(eSz)}"));
                 }
 
-                if (AppSettings.ClearLogOnFinish) ClearTerminal();
-                AppendText("  Launcher download complete.", TC.Ok);
+                if (launcherDownloads.Count == 0) return;
+
+                foreach (var item in launcherDownloads)
+                    ScheduleSingleFileDownload(item.key, item.label, item.url, item.dest, item.size);
+
                 return;
             }
 
@@ -1417,213 +2311,722 @@ namespace StrinowaWPF
             if (manifestTextOpt == null)
             {
                 var vmUrl = $"{baseRoot}/{branch}/{version}/full_zip/manifest.txt";
-                AppendText($"  Fetching version manifest…", TC.Dim);
+                ShowDownloadPreparation($"Preparing {branch} {version}", "Fetching version manifest…");
                 try
                 {
                     manifestText = await Http.GetStringAsync(vmUrl);
                 }
                 catch
                 {
+                    RestoreDownloadPanelAfterPreparation();
                     AppendText("  Version manifest not available.", TC.Warn); return;
                 }
             }
             else manifestText = manifestTextOpt;
 
             var triples = ParseVersionManifest(manifestText);
-            if (triples.Count == 0) { AppendText("  Manifest has no files.", TC.Warn); return; }
+            if (triples.Count == 0)
+            {
+                RestoreDownloadPanelAfterPreparation();
+                AppendText("  Manifest has no files.", TC.Warn);
+                return;
+            }
 
             var items = triples.Select(t =>
             {
                 var url = $"{baseRoot}/{t.rel.TrimStart('/')}";
-                var dest = Path.Combine($"{branch}-{version}", Path.GetFileName(t.rel));
+                var dest = Path.Combine("Game", versionDirectory, Path.GetFileName(t.rel));
                 return new VersionItem(t.rel, t.branch, t.version, url, dest) { Size = null };
             }).ToList();
 
-            AppendText("  Fetching file sizes…", TC.Dim);
+            ShowDownloadPreparation($"Preparing {branch} {version}", "Fetching file sizes…");
             await Parallel.ForEachAsync(items,
                 new ParallelOptions { MaxDegreeOfParallelism = 32 },
                 async (it, _) => { it.Size = await HeadSizeAsync(it.Url); });
 
             long? grand = items.All(i => i.Size.HasValue) ? items.Sum(i => i.Size!.Value) : (long?)null;
-            string szLabel = grand.HasValue ? FormatSize(grand.Value) : "unknown size";
 
-            if (!await AskYesNo($"Download {branch} {version} ({szLabel})?", defaultNo: true))
-            { AppendText("  Cancelled.", TC.Dim); return; }
+            var downloadDirectory = Path.Combine("Game", versionDirectory);
+            Directory.CreateDirectory(downloadDirectory);
+            var extractedArchives = LoadExtractedArchiveKeys(downloadDirectory);
 
-            Directory.CreateDirectory($"{branch}-{version}");
+            bool ItemIsComplete(VersionItem item) =>
+                (File.Exists(item.Dest) &&
+                 (!item.Size.HasValue || new FileInfo(item.Dest).Length == item.Size.Value)) ||
+                (IsGameArchive(item.Dest) && extractedArchives.Contains(item.RelPath));
 
-            var pending = items.Where(it =>
-                !File.Exists(it.Dest) ||
-                (it.Size.HasValue && new FileInfo(it.Dest).Length != it.Size.Value)).ToList();
+            var pending = items.Where(it => !ItemIsComplete(it)).ToList();
 
-            long alreadyDone = items.Where(it => !pending.Contains(it) && it.Size.HasValue)
+            long alreadyDone = items.Where(ItemIsComplete).Where(it => it.Size.HasValue)
                                     .Sum(it => it.Size!.Value);
 
-            _dlTotal = grand ?? 0;
-            _dlDone = alreadyDone;
-            _dlBytes = 0;
-            _dlBytesLast = 0;
-            _dlFilesTotal = items.Count;
-            _dlFilesDone = items.Count - pending.Count;
-            _dlStart = DateTime.UtcNow;
-
-            StartDlBar($"Downloading: {version} ({szLabel})", grand ?? 0, items.Count);
-
-            var sem = new SemaphoreSlim(4, 4);
-            var dlLock = new object();
-            var tasks = pending.Select(async it =>
+            if (pending.Count == 0)
             {
-                await sem.WaitAsync();
-                try
-                {
-                    bool downloaded = false;
-                    while (!downloaded)
-                    {
-                        try
-                        {
-                            await DownloadFileAsync(it.Url, it.Dest, (bytes) =>
-                            {
-                                lock (dlLock)
-                                {
-                                    _dlDone += bytes;
-                                    _dlBytes += bytes;
-                                }
-                            });
-                            downloaded = true;
-                            lock (dlLock) { _dlFilesDone++; }
-                        }
-                        catch
-                        {
-                            Dispatcher.Invoke(() =>
-                                AppendText("  Download paused — connection failed. Press Enter to retry.", TC.Warn));
-                            await AskInput("Press Enter to retry…");
-                        }
-                    }
-                }
-                finally { sem.Release(); }
-            });
-
-            await Task.WhenAll(tasks);
-            StopDlBar();
-
-            // verification for slow wifi. Add this as an option later in settings 2026-06-19
-            var paks = items.Where(it => it.RelPath.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)).ToList();
-            var mismatches = new List<string>();
-            foreach (var it in paks)
-            {
-                var expected = it.Size;
-                long actual = File.Exists(it.Dest) ? new FileInfo(it.Dest).Length : -1;
-                if (expected.HasValue && actual != expected.Value)
-                    mismatches.Add($"  {Path.GetFileName(it.Dest)}: expected {FormatSize(expected.Value)}, got {FormatSize(actual)}");
+                RestoreDownloadPanelAfterPreparation();
+                AppendText("  All files are already downloaded.", TC.Ok);
+                return;
             }
-            if (mismatches.Count > 0)
-            {
-                AppendText("  Pak size verification failed:", TC.Warn);
-                foreach (var m in mismatches) AppendText(m, TC.Warn);
-            }
-            else AppendText($"  Pak size verification passed ({paks.Count} file(s)).", TC.Ok);
 
-            if (AppSettings.ClearLogOnFinish) ClearTerminal();
-            AppendText("  Your Strinowa client has downloaded.", TC.Ok);
+            var remaining = pending.All(i => i.Size.HasValue) ? pending.Sum(i => i.Size!.Value) : (long?)null;
+            if (!skipConfirmation && !await ConfirmDownloadInPanelAsync(
+                $"Download {branch} {version}", $"{pending.Count:N0} files  •  {FormatSize(remaining)}"))
+                return;
+
+            var job = TryStartDownloadJob(
+                $"game|{baseRoot}|{branch}|{version}",
+                $"Downloading {branch} {version}",
+                pending.Select(item => item.Dest),
+                grand ?? 0,
+                items.Count,
+                alreadyDone,
+                items.Count - pending.Count);
+            if (job == null)
+            {
+                AppendText("  That download is already active.", TC.Warn);
+                return;
+            }
+
+            _ = RunGameDownloadJobAsync(job, items, pending);
         }
-        void StartDlBar(string label, long total, int fileCount)
+
+        void ShowDownloadPreparation(string label, string details)
         {
+            if (_downloadConfirmSource != null) return;
+            _downloadCompletionVisible = false;
+            _completedDownloadFolder = null;
+            DownloadCompletionActions.Visibility = Visibility.Collapsed;
+            _downloadPreparationVisible = true;
+            DownloadPanel.Visibility = Visibility.Visible;
+            DlLabel.Text = label;
+            DlStats.Text = details;
+            DlStats.Visibility = Visibility.Visible;
+            PauseBtn.Visibility = Visibility.Collapsed;
+            DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            DownloadCancelBtn.Visibility = Visibility.Collapsed;
+            LauncherDownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            LauncherDownloadCancelBtn.Visibility = Visibility.Collapsed;
+            LauncherFormatPanel.Visibility = Visibility.Collapsed;
+            MultiDownloadPanel.Visibility = Visibility.Collapsed;
+            DlTrack.Visibility = Visibility.Collapsed;
+            DlFooterGrid.Visibility = Visibility.Collapsed;
+        }
+
+        void RestoreDownloadPanelAfterPreparation()
+        {
+            _downloadPreparationVisible = false;
+            PauseBtn.Visibility = Visibility.Visible;
+            DlTrack.Visibility = Visibility.Visible;
+            DlFooterGrid.Visibility = Visibility.Visible;
+            if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+            else UpdateDlBar(null, EventArgs.Empty);
+        }
+
+        async Task<bool> ConfirmDownloadInPanelAsync(string label, string details)
+        {
+            if (_downloadConfirmSource != null) return false;
+            _downloadPreparationVisible = false;
+            _downloadConfirmSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            DownloadPanel.Visibility = Visibility.Visible;
+            DlLabel.Text = label;
+            DlStats.Text = details;
+            DlStats.Visibility = Visibility.Visible;
+            PauseBtn.Visibility = Visibility.Collapsed;
+            LauncherFormatPanel.Visibility = Visibility.Collapsed;
+            MultiDownloadPanel.Visibility = Visibility.Collapsed;
+            LauncherDownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            LauncherDownloadCancelBtn.Visibility = Visibility.Collapsed;
+            DownloadConfirmBtn.Visibility = Visibility.Visible;
+            DownloadCancelBtn.Visibility = Visibility.Visible;
+            DownloadConfirmBtn.IsEnabled = true;
+            DownloadConfirmBtn.Opacity = 1.0;
+            DlTrack.Visibility = Visibility.Collapsed;
+            DlFooterGrid.Visibility = Visibility.Collapsed;
+
+            try
+            {
+                return await _downloadConfirmSource.Task;
+            }
+            finally
+            {
+                _downloadConfirmSource = null;
+                DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+                DownloadCancelBtn.Visibility = Visibility.Collapsed;
+                DownloadConfirmBtn.IsEnabled = true;
+                DownloadConfirmBtn.Opacity = 1.0;
+                PauseBtn.Visibility = Visibility.Visible;
+                DlTrack.Visibility = Visibility.Visible;
+                DlFooterGrid.Visibility = Visibility.Visible;
+                if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+                else UpdateDlBar(null, EventArgs.Empty);
+            }
+        }
+
+        async Task<(bool Confirmed, bool Download7z, bool DownloadExe)> ConfirmLauncherDownloadInPanelAsync(
+            string label, bool has7z, long? size7z, bool hasExe, long? sizeExe)
+        {
+            if (_downloadConfirmSource != null) return (false, false, false);
+            _downloadPreparationVisible = false;
+            _downloadConfirmSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _launcherFormatConfirmation = true;
+
+            DownloadPanel.Visibility = Visibility.Visible;
+            DlLabel.Text = label;
+            DlStats.Visibility = Visibility.Visible;
+            PauseBtn.Visibility = Visibility.Collapsed;
+            DlTrack.Visibility = Visibility.Collapsed;
+            DlFooterGrid.Visibility = Visibility.Collapsed;
+            LauncherFormatPanel.Visibility = Visibility.Visible;
+            MultiDownloadPanel.Visibility = Visibility.Collapsed;
+
+            Launcher7zToggle.IsEnabled = has7z;
+            LauncherExeToggle.IsEnabled = hasExe;
+            _launcher7zSize = size7z;
+            _launcherExeSize = sizeExe;
+            Launcher7zToggle.IsChecked = has7z && AppSettings.LauncherDefault7z;
+            LauncherExeToggle.IsChecked = hasExe && AppSettings.LauncherDefaultExe;
+            if (Launcher7zToggle.IsChecked != true && LauncherExeToggle.IsChecked != true)
+            {
+                if (has7z) Launcher7zToggle.IsChecked = true;
+                else if (hasExe) LauncherExeToggle.IsChecked = true;
+            }
+
+            DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            DownloadCancelBtn.Visibility = Visibility.Collapsed;
+            LauncherDownloadConfirmBtn.Visibility = Visibility.Visible;
+            LauncherDownloadCancelBtn.Visibility = Visibility.Visible;
+            UpdateLauncherDownloadButton();
+
+            try
+            {
+                bool confirmed = await _downloadConfirmSource.Task;
+                return (confirmed,
+                    confirmed && has7z && Launcher7zToggle.IsChecked == true,
+                    confirmed && hasExe && LauncherExeToggle.IsChecked == true);
+            }
+            finally
+            {
+                _launcherFormatConfirmation = false;
+                _downloadConfirmSource = null;
+                LauncherFormatPanel.Visibility = Visibility.Collapsed;
+                DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+                LauncherDownloadConfirmBtn.Visibility = Visibility.Collapsed;
+                LauncherDownloadCancelBtn.Visibility = Visibility.Collapsed;
+                LauncherDownloadConfirmBtn.IsEnabled = true;
+                LauncherDownloadConfirmBtn.Opacity = 1.0;
+                PauseBtn.Visibility = Visibility.Visible;
+                DlTrack.Visibility = Visibility.Visible;
+                DlFooterGrid.Visibility = Visibility.Visible;
+                if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+                else UpdateDlBar(null, EventArgs.Empty);
+            }
+        }
+
+        void LauncherFormatToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_launcherFormatConfirmation) return;
+            SaveLauncherFormatPreferencesFromPanel();
+            UpdateLauncherDownloadButton();
+        }
+
+        void SaveLauncherFormatPreferencesFromPanel()
+        {
+            if (Launcher7zToggle.IsEnabled)
+                AppSettings.LauncherDefault7z = Launcher7zToggle.IsChecked == true;
+            if (LauncherExeToggle.IsEnabled)
+                AppSettings.LauncherDefaultExe = LauncherExeToggle.IsChecked == true;
+
+            _cfg.Fmt7z = AppSettings.LauncherDefault7z;
+            _cfg.FmtExe = AppSettings.LauncherDefaultExe;
+            _cfg.Save();
+        }
+
+        static string MultiDownloadChoiceId(AllDownloadChoice choice) =>
+            $"{choice.Source}|{choice.ResolvedBranch}|{choice.Version}";
+
+        async Task<List<AllDownloadChoice>> ConfirmMultiDownloadInPanelAsync(
+            string version, List<AllDownloadChoice> choices)
+        {
+            if (_downloadConfirmSource != null) return [];
+            ShowDownloadPreparation($"Preparing multi-download {version}", "Reading branch sizes…");
+            choices = await PopulateMultiDownloadSizesAsync(choices);
+            _downloadPreparationVisible = false;
+            _downloadConfirmSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _multiDownloadChoices = choices.OrderBy(choice => choice.Date ?? DateTime.MaxValue)
+                .ThenBy(choice => choice.DisplayBranch, StringComparer.OrdinalIgnoreCase).ToList();
+            _multiDownloadSelected.Clear();
+
+            DownloadPanel.Visibility = Visibility.Visible;
+            DlLabel.Text = $"Download {version} from multiple branches";
+            DlStats.Text = $"{choices.Count} branches";
+            DlStats.Visibility = Visibility.Visible;
+            PauseBtn.Visibility = Visibility.Collapsed;
+            DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            DownloadCancelBtn.Visibility = Visibility.Collapsed;
+            LauncherDownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            LauncherDownloadCancelBtn.Visibility = Visibility.Collapsed;
+            LauncherFormatPanel.Visibility = Visibility.Collapsed;
+            MultiDownloadPanel.Visibility = Visibility.Visible;
+            DlTrack.Visibility = Visibility.Collapsed;
+            DlFooterGrid.Visibility = Visibility.Collapsed;
+            RenderMultiDownloadPage();
+
+            try
+            {
+                var confirmed = await _downloadConfirmSource.Task;
+                return confirmed
+                    ? _multiDownloadChoices.Where(choice =>
+                        _multiDownloadSelected.Contains(MultiDownloadChoiceId(choice))).ToList()
+                    : [];
+            }
+            finally
+            {
+                _downloadConfirmSource = null;
+                MultiDownloadPanel.Visibility = Visibility.Collapsed;
+                MultiChoiceRows.Children.Clear();
+                _multiDownloadChoices = [];
+                _multiDownloadSelected.Clear();
+                PauseBtn.Visibility = Visibility.Visible;
+                DlTrack.Visibility = Visibility.Visible;
+                DlFooterGrid.Visibility = Visibility.Visible;
+                if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+                else UpdateDlBar(null, EventArgs.Empty);
+            }
+        }
+
+        void RenderMultiDownloadPage()
+        {
+            MultiChoiceRows.Children.Clear();
+            foreach (var choice in _multiDownloadChoices)
+            {
+                var id = MultiDownloadChoiceId(choice);
+                var indicatorText = new TextBlock
+                {
+                    Text = _multiDownloadSelected.Contains(id) ? "✓" : "",
+                    TextAlignment = TextAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontSize = 12,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = Brushes.White,
+                };
+                var indicator = new Border
+                {
+                    Width = 18,
+                    Height = 18,
+                    CornerRadius = new CornerRadius(5),
+                    BorderThickness = new Thickness(1.4),
+                    BorderBrush = TC.Pink,
+                    Background = _multiDownloadSelected.Contains(id) ? TC.Pink : Brushes.Transparent,
+                    Child = indicatorText,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                var row = new Grid();
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(118) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+                row.Children.Add(indicator);
+                var branchText = new TextBlock
+                {
+                    Text = $"{choice.Version}   {BranchCatalog.ShortName(choice.DisplayBranch)}",
+                    Foreground = (Brush)Resources["ControlTextBrush"],
+                    FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
+                    FontSize = 11.5,
+                    FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    ToolTip = choice.DisplayBranch,
+                };
+                Grid.SetColumn(branchText, 1);
+                row.Children.Add(branchText);
+                var sourceText = new TextBlock
+                {
+                    Text = choice.Size.HasValue
+                        ? $"{choice.Source}  {FormatMultiSize(choice.Size.Value)}"
+                        : choice.Source,
+                    Foreground = TC.Info,
+                    FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
+                    FontSize = 10.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                Grid.SetColumn(sourceText, 2);
+                row.Children.Add(sourceText);
+                var dateText = new TextBlock
+                {
+                    Text = choice.Date?.ToString("yyyy-MM-dd HH:mm:ss 'GMT+01'") ?? "Date unavailable",
+                    Foreground = TC.Dim,
+                    FontFamily = new FontFamily("Cascadia Mono, Consolas, Courier New"),
+                    FontSize = 10.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                };
+                Grid.SetColumn(dateText, 3);
+                row.Children.Add(dateText);
+                if (choice.Hidden)
+                {
+                    var hidden = new TextBlock
+                    {
+                        Text = "⚑",
+                        Foreground = TC.Warn,
+                        FontSize = 12,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        ToolTip = "This is a Hidden build. It is not stored on the public manifest.",
+                    };
+                    Grid.SetColumn(hidden, 4);
+                    row.Children.Add(hidden);
+                }
+                var toggle = new System.Windows.Controls.Primitives.ToggleButton
+                {
+                    Style = (Style)FindResource("MultiChoiceRow"),
+                    Content = row,
+                    IsChecked = _multiDownloadSelected.Contains(id),
+                    IsEnabled = choice.Exists,
+                    Tag = id,
+                    ToolTip = choice.Exists ? choice.DisplayBranch : "This build is listed, but its downloadable files are unavailable.",
+                };
+                void UpdateSelection(bool selected)
+                {
+                    if (selected) _multiDownloadSelected.Add(id);
+                    else _multiDownloadSelected.Remove(id);
+                    indicatorText.Text = selected ? "✓" : "";
+                    indicator.Background = selected ? TC.Pink : Brushes.Transparent;
+                    UpdateMultiDownloadSelectionState();
+                }
+                toggle.Checked += (_, _) => UpdateSelection(true);
+                toggle.Unchecked += (_, _) => UpdateSelection(false);
+                MultiChoiceRows.Children.Add(toggle);
+            }
+            UpdateMultiDownloadSelectionState();
+        }
+
+        void UpdateMultiDownloadSelectionState()
+        {
+            var count = _multiDownloadSelected.Count;
+            MultiSelectionCount.Text = $"{count} of {_multiDownloadChoices.Count} selected";
+            MultiDownloadBtn.Content = count == 0 ? "Download selected" : $"Download selected ({count})";
+            MultiDownloadBtn.IsEnabled = count > 0;
+            MultiDownloadBtn.Opacity = count > 0 ? 1 : 0.45;
+        }
+
+        void MultiSelectAll_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (var choice in _multiDownloadChoices)
+                if (choice.Exists) _multiDownloadSelected.Add(MultiDownloadChoiceId(choice));
+            RenderMultiDownloadPage();
+        }
+
+        void MultiClear_Click(object sender, RoutedEventArgs e)
+        {
+            _multiDownloadSelected.Clear();
+            RenderMultiDownloadPage();
+        }
+
+        void MultiCancel_Click(object sender, RoutedEventArgs e) =>
+            _downloadConfirmSource?.TrySetResult(false);
+
+        void MultiDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (_multiDownloadSelected.Count > 0)
+                _downloadConfirmSource?.TrySetResult(true);
+        }
+
+        async Task<List<AllDownloadChoice>> PopulateMultiDownloadSizesAsync(List<AllDownloadChoice> choices)
+        {
+            var result = choices.ToArray();
+            await Parallel.ForEachAsync(Enumerable.Range(0, result.Length),
+                new ParallelOptions { MaxDegreeOfParallelism = 12 },
+                async (index, _) =>
+                {
+                    var choice = result[index];
+                    if (!choice.ResolvedBranch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)) return;
+                    var root = RootForSource(choice.Source);
+                    var archiveUrl = $"{root}/{choice.ResolvedBranch}/{choice.Version}/full_{choice.Version}.7z";
+                    var size = await HeadSizeAsync(archiveUrl);
+                    if (!size.HasValue)
+                    {
+                        var launcherName = choice.ResolvedBranch["Launcher_".Length..];
+                        var prefix = choice.Source.Equals("OS", StringComparison.OrdinalIgnoreCase) ? "Strinova" : "Calabiyau";
+                        var installerUrl = $"{root}/{choice.ResolvedBranch}/{choice.Version}/{prefix}_Installer_{launcherName}_{choice.Version}.exe";
+                        size = await HeadSizeAsync(installerUrl);
+                    }
+                    result[index] = choice with { Size = size };
+                });
+            return result.ToList();
+        }
+
+        static string FormatMultiSize(long bytes) => $"{bytes / 1048576d:F3}MB";
+
+        void UpdateLauncherDownloadButton()
+        {
+            LauncherDownloadConfirmBtn.IsEnabled =
+                (Launcher7zToggle.IsEnabled && Launcher7zToggle.IsChecked == true) ||
+                (LauncherExeToggle.IsEnabled && LauncherExeToggle.IsChecked == true);
+            LauncherDownloadConfirmBtn.Opacity = LauncherDownloadConfirmBtn.IsEnabled ? 1.0 : 0.45;
+
+            var selectedSizes = new List<string>(2);
+            if (Launcher7zToggle.IsEnabled && Launcher7zToggle.IsChecked == true)
+                selectedSizes.Add($"7z {FormatSize(_launcher7zSize)}");
+            if (LauncherExeToggle.IsEnabled && LauncherExeToggle.IsChecked == true)
+                selectedSizes.Add($"EXE {FormatSize(_launcherExeSize)}");
+            DlStats.Text = selectedSizes.Count > 0
+                ? string.Join("  +  ", selectedSizes)
+                : "Select a format";
+        }
+
+        void DownloadConfirmBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_launcherFormatConfirmation && !LauncherDownloadConfirmBtn.IsEnabled) return;
+            if (_launcherFormatConfirmation) SaveLauncherFormatPreferencesFromPanel();
+            _downloadConfirmSource?.TrySetResult(true);
+        }
+
+        void DownloadCancelBtn_Click(object sender, RoutedEventArgs e) =>
+            _downloadConfirmSource?.TrySetResult(false);
+        DownloadJob? TryStartDownloadJob(
+            string key,
+            string label,
+            IEnumerable<string> destinations,
+            long totalBytes,
+            int fileCount,
+            long completedBytes = 0,
+            int completedFiles = 0)
+        {
+            var fullDestinations = destinations
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var job = new DownloadJob
+            {
+                Key = key,
+                Label = label,
+                Destinations = fullDestinations,
+                TotalBytes = totalBytes,
+                FileCount = fileCount,
+                CompletedBytes = completedBytes,
+                CompletedFiles = completedFiles,
+            };
+
+            lock (_downloadJobsLock)
+            {
+                if (_downloadJobs.ContainsKey(key) ||
+                    fullDestinations.Any(_activeDownloadDestinations.Contains)) return null;
+                _downloadJobs.Add(key, job);
+                foreach (var destination in fullDestinations)
+                    _activeDownloadDestinations.Add(destination);
+            }
+
             Dispatcher.Invoke(() =>
             {
-                _dlTotal = total; _dlFilesDone = 0; _dlFilesTotal = fileCount;
-                _dlDone = 0; _dlBytes = 0; _dlBytesLast = 0;
-                _dlStart = DateTime.UtcNow;
-                DlLabel.Text = label;
-                DlStats.Text = "";
-                DlSubLabel.Text = "";
-                DlEta.Text = "";
-                DlFill.Width = 0;
+                _downloadCompletionVisible = false;
+                _completedDownloadFolder = null;
+                DownloadCompletionActions.Visibility = Visibility.Collapsed;
                 DownloadPanel.Visibility = Visibility.Visible;
-
-                _dlTimer = new System.Windows.Threading.DispatcherTimer
+                var active = ActiveDownloads();
+                _dlLastSampleBytes = active.Sum(item => Interlocked.Read(ref item.TransferredBytes));
+                _dlLastSampleUtc = DateTime.UtcNow;
+                if (_dlTimer == null)
                 {
-                    Interval = TimeSpan.FromMilliseconds(300)
-                };
-                _dlTimer.Tick += UpdateDlBar;
-                _dlTimer.Start();
+                    _dlTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+                    _dlTimer.Tick += UpdateDlBar;
+                    _dlTimer.Start();
+                }
+                UpdateDlBar(null, EventArgs.Empty);
             });
+            return job;
+        }
+
+        void CompleteDownloadJob(DownloadJob job, string? completedFolder = null, string? completedLabel = null)
+        {
+            lock (_downloadJobsLock)
+            {
+                _downloadJobs.Remove(job.Key);
+                foreach (var destination in job.Destinations)
+                    _activeDownloadDestinations.Remove(destination);
+            }
+            Dispatcher.Invoke(() =>
+            {
+                if (!string.IsNullOrWhiteSpace(completedFolder))
+                {
+                    _downloadCompletionVisible = true;
+                    _completedDownloadFolder = Path.GetFullPath(completedFolder);
+                    _completedDownloadLabel = completedLabel ?? "Download complete";
+                    SoundEffects.DownloadFinished();
+                }
+                UpdateDlBar(null, EventArgs.Empty);
+            });
+        }
+
+        void ShowCompletedDownload()
+        {
+            DownloadPanel.Visibility = Visibility.Visible;
+            PauseBtn.Visibility = Visibility.Collapsed;
+            DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+            DownloadCancelBtn.Visibility = Visibility.Collapsed;
+            DownloadCompletionActions.Visibility = Visibility.Visible;
+            DlLabel.Text = _completedDownloadLabel;
+            DlStats.Text = "";
+            DlSubLabel.Text = _completedDownloadFolder ?? "";
+            DlEta.Text = "";
+            DlFill.Margin = new Thickness(0);
+            DlFill.Width = Math.Max(0, DownloadPanel.ActualWidth - 28);
+        }
+
+        bool IsOnlyActiveDownload(DownloadJob job)
+        {
+            lock (_downloadJobsLock)
+                return _downloadJobs.Count == 1 && _downloadJobs.ContainsKey(job.Key);
+        }
+
+        bool CanClearLogFor(DownloadJob job) =>
+            AppSettings.ClearLogOnFinish && !_busy && _promptSem == null && IsOnlyActiveDownload(job);
+
+        DownloadJob[] ActiveDownloads()
+        {
+            lock (_downloadJobsLock) return _downloadJobs.Values.ToArray();
+        }
+
+        void SetDownloadActivity(DownloadJob job, string? activity, string? detail = null)
+        {
+            job.Activity = activity;
+            job.ActivityDetail = detail;
+            if (Dispatcher.CheckAccess()) UpdateDlBar(null, EventArgs.Empty);
+            else Dispatcher.Invoke(() => UpdateDlBar(null, EventArgs.Empty));
         }
 
         double _dlFillWavePhase = 0;
 
         void UpdateDlBar(object? s, EventArgs e)
         {
-            var elapsed = (DateTime.UtcNow - _dlStart).TotalSeconds;
-            var speed = elapsed > 1.0 ? _dlBytes / elapsed : 0;
-            var done = _dlDone;
-            var total = _dlTotal;
-            double frac = total > 0 ? Math.Min(1.0, (double)done / total) : -1;
+            if (_downloadConfirmSource != null || _downloadPreparationVisible) return;
+            var jobs = ActiveDownloads();
+            if (jobs.Length == 0)
+            {
+                _dlTimer?.Stop();
+                _dlTimer = null;
+                if (_isPaused)
+                {
+                    _isPaused = false;
+                    _pauseGate.Set();
+                    PauseBtn.Content = "\uE769";
+                    PauseBtn.ToolTip = Strings.Get("pause");
+                }
+                _dlSmoothedBytesPerSecond = 0;
+                if (_downloadCompletionVisible)
+                {
+                    ShowCompletedDownload();
+                    return;
+                }
+                DownloadPanel.Visibility = Visibility.Collapsed;
+                DlFill.Margin = new Thickness(0);
+                DlFill.Width = 0;
+                return;
+            }
 
-            DlStats.Text = $"{_dlFilesDone}/{_dlFilesTotal} files";
-            if (done > 0)
-                DlSubLabel.Text = $"{FormatSize(done)} / {(total > 0 ? FormatSize(total) : "?")}   {FormatSize((long)speed)}/s";
+            var staged = jobs.Where(job => !string.IsNullOrWhiteSpace(job.Activity)).ToArray();
+            if (staged.Length > 0)
+            {
+                var stage = staged[0];
+                DlLabel.Text = jobs.Length == 1 ? stage.Activity! : $"{jobs.Length} downloads • {stage.Activity}";
+                DlStats.Text = stage.ActivityDetail ?? "";
+                DlSubLabel.Text = "Downloader activity";
+                DlEta.Text = "";
+                DlFill.Margin = new Thickness(0);
+                DlFill.Width = Math.Max(0, DownloadPanel.ActualWidth - 28);
+                return;
+            }
 
-            if (frac >= 0 && done > 0)
+            var done = jobs.Sum(j => Interlocked.Read(ref j.CompletedBytes));
+            var transferred = jobs.Sum(j => Interlocked.Read(ref j.TransferredBytes));
+            var total = jobs.Sum(j => j.TotalBytes);
+            var allSizesKnown = jobs.All(j => j.TotalBytes > 0);
+            var filesDone = jobs.Sum(j => Volatile.Read(ref j.CompletedFiles));
+            var fileCount = jobs.Sum(j => j.FileCount);
+            var now = DateTime.UtcNow;
+            var sampleSeconds = Math.Max(0.001, (now - _dlLastSampleUtc).TotalSeconds);
+            var sampleBytes = Math.Max(0, transferred - _dlLastSampleBytes);
+            var sampleSpeed = sampleBytes / sampleSeconds;
+            if (_isPaused)
+                _dlSmoothedBytesPerSecond = 0;
+            else if (sampleBytes > 0)
+                _dlSmoothedBytesPerSecond = _dlSmoothedBytesPerSecond <= 0
+                    ? sampleSpeed
+                    : _dlSmoothedBytesPerSecond * 0.72 + sampleSpeed * 0.28;
+            else
+                _dlSmoothedBytesPerSecond *= 0.82;
+            var speed = _dlSmoothedBytesPerSecond;
+            _dlLastSampleBytes = transferred;
+            _dlLastSampleUtc = now;
+            var frac = allSizesKnown && total > 0 ? Math.Min(1.0, (double)done / total) : -1;
+            var baseLabel = jobs.Length == 1 ? jobs[0].Label : $"{jobs.Length} downloads active";
+
+            DlStats.Text = $"{filesDone}/{fileCount} files";
+            DlSubLabel.Text = done > 0
+                ? $"{FormatSize(done)} / {(allSizesKnown ? FormatSize(total) : "?")}   {(_isPaused ? "Paused" : $"{FormatSize((long)speed)}/s")}"
+                : "Starting downloads...";
+            DlEta.Text = _isPaused ? "Paused" : "";
+
+            if (frac >= 0)
             {
                 var trackW = Math.Max(0, DownloadPanel.ActualWidth - 28);
                 DlFill.Width = Math.Max(0, frac * trackW);
                 DlFill.Margin = new Thickness(0);
-                var pct = (int)(frac * 100);
-                DlLabel.Text = DlLabel.Text.Split('[')[0].TrimEnd() + $"  {pct}%";
+                DlLabel.Text = $"{(_isPaused ? "Paused - " : "")}{baseLabel}  {(int)(frac * 100)}%";
 
-                if (speed > 0 && total > done)
+                if (!_isPaused && speed > 0 && total > done)
                 {
-                    var eta = TimeSpan.FromSeconds((total - done) / speed);
-                    DlEta.Text = $"ETA {eta:mm\\:ss}";
-                }
-
-                // wave gradient on the fill bar
-                _dlFillWavePhase = (_dlFillWavePhase + 0.06) % (Math.PI * 2);
-                double wave = (Math.Sin(_dlFillWavePhase) + 1.0) / 2.0;
-                var hiR = (byte)(0xDC + (int)((0xFF - 0xDC) * wave));
-                var lo = (byte)(0x32 + (int)((0x80 - 0x32) * wave));
-                if (DlFill.Background is LinearGradientBrush gb && gb.GradientStops.Count >= 2)
-                {
-                    gb.GradientStops[0].Color = Color.FromRgb(hiR, lo, 0x78);
-                    gb.GradientStops[1].Color = Color.FromRgb(0x8C, (byte)(wave * 0x60), 0xC8);
+                    var eta = TimeSpan.FromSeconds(Math.Max(1, (total - done) / speed));
+                    DlEta.Text = eta.TotalHours >= 1 ? $"ETA {eta:hh\\:mm\\:ss}" : $"ETA {eta:mm\\:ss}";
                 }
             }
-            else if (done == 0)
+            else
             {
-                // indeterminate bounce when total unknown or no bytes received yet
+                DlLabel.Text = $"{(_isPaused ? "Paused - " : "")}{baseLabel}";
                 var trackW = Math.Max(1, DownloadPanel.ActualWidth - 28 - 60);
                 DlFill.Width = 60;
-                var off = (int)(elapsed * 160) % (int)Math.Max(1, trackW);
-                DlFill.Margin = new Thickness(off, 0, 0, 0);
+                if (!_isPaused)
+                {
+                    var elapsed = Math.Max(0.1, (now - jobs.Min(j => j.StartedUtc)).TotalSeconds);
+                    var off = (int)(elapsed * 160) % (int)Math.Max(1, trackW);
+                    DlFill.Margin = new Thickness(off, 0, 0, 0);
+                }
             }
-        }
 
-        void StopDlBar()
-        {
-            Dispatcher.Invoke(() =>
+            _dlFillWavePhase = (_dlFillWavePhase + 0.06) % (Math.PI * 2);
+            double wave = (Math.Sin(_dlFillWavePhase) + 1.0) / 2.0;
+            var hiR = (byte)(0xDC + (int)((0xFF - 0xDC) * wave));
+            var lo = (byte)(0x32 + (int)((0x80 - 0x32) * wave));
+            if (DlFill.Background is LinearGradientBrush gb && gb.GradientStops.Count >= 2)
             {
-                _dlTimer?.Stop();
-                _dlTimer = null;
-                DownloadPanel.Visibility = Visibility.Collapsed;
-                DlFill.Margin = new Thickness(0);
-                DlFill.Width = 0;
-            });
+                gb.GradientStops[0].Color = Color.FromRgb(hiR, lo, 0x78);
+                gb.GradientStops[1].Color = Color.FromRgb(0x8C, (byte)(wave * 0x60), 0xC8);
+            }
         }
 
         bool _isPaused = false;
-        SemaphoreSlim _pauseSem = new(1, 1);
+        readonly AsyncManualResetEvent _pauseGate = new(true);
 
         public void TogglePause()
         {
             _isPaused = !_isPaused;
-            if (!_isPaused) _pauseSem.Release();
+            if (_isPaused) _pauseGate.Reset();
+            else _pauseGate.Set();
+            _dlLastSampleBytes = ActiveDownloads().Sum(job => Interlocked.Read(ref job.TransferredBytes));
+            _dlLastSampleUtc = DateTime.UtcNow;
+            _dlSmoothedBytesPerSecond = 0;
+            UpdateDlBar(null, EventArgs.Empty);
         }
 
         async Task DownloadFileAsync(string url, string dest, Action<long>? onProgress)
         {
             var tmp = dest + ".part";
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            await _pauseGate.WaitAsync();
+            HttpResponseMessage response;
+            using (var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(90)))
+                response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, requestTimeout.Token);
+            using var resp = response;
             resp.EnsureSuccessStatusCode();
             if (File.Exists(tmp)) File.Delete(tmp);
             await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
@@ -1633,20 +3036,32 @@ namespace StrinowaWPF
             long chunkBytes = 0;
             var chunkStart = DateTime.UtcNow;
 
-            while ((read = await net.ReadAsync(buf)) > 0)
+            while (true)
             {
-                // pause support
-                if (_isPaused)
+                var pauseWaitStarted = Stopwatch.GetTimestamp();
+                await _pauseGate.WaitAsync();
+                var pauseWaitSeconds = (Stopwatch.GetTimestamp() - pauseWaitStarted) / (double)Stopwatch.Frequency;
+                if (pauseWaitSeconds > 0.05)
                 {
-                    _pauseSem = new SemaphoreSlim(0, 1);
-                    await _pauseSem.WaitAsync();
+                    chunkBytes = 0;
+                    chunkStart = DateTime.UtcNow;
+                }
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                read = await net.ReadAsync(buf, readTimeout.Token);
+                if (read == 0) break;
+                pauseWaitStarted = Stopwatch.GetTimestamp();
+                await _pauseGate.WaitAsync();
+                pauseWaitSeconds = (Stopwatch.GetTimestamp() - pauseWaitStarted) / (double)Stopwatch.Frequency;
+                if (pauseWaitSeconds > 0.05)
+                {
+                    chunkBytes = 0;
+                    chunkStart = DateTime.UtcNow;
                 }
 
                 await fs.WriteAsync(buf.AsMemory(0, read));
                 onProgress?.Invoke(read);
                 chunkBytes += read;
 
-                // speed throttle
                 var limitBps = (long)AppSettings.SpeedLimitKBs * 1024;
                 if (limitBps > 0)
                 {
@@ -1667,32 +3082,394 @@ namespace StrinowaWPF
             File.Move(tmp, dest);
         }
 
+        static bool IsGameArchive(string path)
+        {
+            var name = System.IO.Path.GetFileName(path);
+            return name.EndsWith(".7z", StringComparison.OrdinalIgnoreCase) ||
+                   name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                   name.EndsWith(".minizip", StringComparison.OrdinalIgnoreCase) ||
+                   Regex.IsMatch(name, @"\.(?:7z|zip)\.\d{3}$", RegexOptions.IgnoreCase) ||
+                   name.EndsWith(".001", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string ExtractionMarkerPath(string directory) =>
+            System.IO.Path.Combine(directory, ".strinowa-extracted");
+
+        static HashSet<string> LoadExtractedArchiveKeys(string directory)
+        {
+            var marker = ExtractionMarkerPath(directory);
+            try
+            {
+                return File.Exists(marker)
+                    ? File.ReadAllLines(marker).Where(line => !string.IsNullOrWhiteSpace(line))
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+            catch { return new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+        }
+
+        static void SaveExtractedArchiveKeys(string directory, HashSet<string> keys)
+        {
+            var marker = ExtractionMarkerPath(directory);
+            var temporary = marker + ".tmp";
+            File.WriteAllLines(temporary, keys.OrderBy(key => key, StringComparer.OrdinalIgnoreCase));
+            File.Move(temporary, marker, true);
+        }
+
+        async Task<(bool Success, string Error)> ExtractArchiveHereAsync(
+            string archivePath, string outputDirectory)
+        {
+
+            var sevenZip = BundledTools.GetSevenZipPath();
+            if (sevenZip == null) return (false, "The bundled extractor could not be loaded.");
+            try
+            {
+                var start = new System.Diagnostics.ProcessStartInfo(sevenZip)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = outputDirectory,
+                };
+                start.ArgumentList.Add("x");
+                start.ArgumentList.Add("-y");
+                start.ArgumentList.Add("-aoa");
+                start.ArgumentList.Add("-bsp0");
+                start.ArgumentList.Add("-o" + outputDirectory);
+                start.ArgumentList.Add(System.IO.Path.GetFullPath(archivePath));
+                using var process = System.Diagnostics.Process.Start(start);
+                if (process == null) return (false, "7za.exe could not be started.");
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                var output = await outputTask;
+                var error = await errorTask;
+                if (process.ExitCode == 0) return (true, "");
+                var detail = string.IsNullOrWhiteSpace(error) ? output : error;
+                return (false, string.IsNullOrWhiteSpace(detail)
+                    ? $"7za exited with code {process.ExitCode}."
+                    : detail.Trim().Split('\n').Last().Trim());
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
+
+        async Task<(int Extracted, int Failed)> ExtractGameArchivesAsync(DownloadJob job, List<VersionItem> items)
+        {
+            var archives = items.Where(item => IsGameArchive(item.Dest)).ToList();
+            if (archives.Count == 0) return (0, 0);
+
+            var outputDirectory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(items[0].Dest))!;
+            var extractedKeys = LoadExtractedArchiveKeys(outputDirectory);
+            int extracted = 0, failed = 0, processed = 0;
+
+            foreach (var archive in archives)
+            {
+                var fileName = System.IO.Path.GetFileName(archive.Dest);
+                var volumeMatch = Regex.Match(fileName, @"^(.*)\.(\d{3})$");
+                if (volumeMatch.Success && volumeMatch.Groups[2].Value != "001") continue;
+                if (extractedKeys.Contains(archive.RelPath) || !File.Exists(archive.Dest)) continue;
+
+                processed++;
+                SetDownloadActivity(job, "Extracting game resources", $"{processed}/{archives.Count}  •  {fileName}");
+                var result = await ExtractArchiveHereAsync(archive.Dest, outputDirectory);
+                if (!result.Success)
+                {
+                    failed++;
+                    continue;
+                }
+
+                var related = new List<VersionItem> { archive };
+                if (volumeMatch.Success)
+                {
+                    var baseName = volumeMatch.Groups[1].Value;
+                    related = archives.Where(item =>
+                    {
+                        var candidate = System.IO.Path.GetFileName(item.Dest);
+                        return Regex.IsMatch(candidate, "^" + Regex.Escape(baseName) + @"\.\d{3}$",
+                            RegexOptions.IgnoreCase);
+                    }).ToList();
+                }
+
+                foreach (var part in related)
+                {
+                    if (File.Exists(part.Dest)) File.Delete(part.Dest);
+                    extractedKeys.Add(part.RelPath);
+                }
+                SaveExtractedArchiveKeys(outputDirectory, extractedKeys);
+                extracted++;
+            }
+
+            return (extracted, failed);
+        }
+
+        bool ScheduleSingleFileDownload(
+            string key, string label, string url, string dest, long totalBytes)
+        {
+            var job = TryStartDownloadJob(key, label, [dest], totalBytes, 1);
+            if (job == null)
+            {
+                AppendText("  That download is already active.", TC.Warn);
+                return false;
+            }
+
+            _ = RunSingleFileDownloadJobAsync(job, url, dest);
+            return true;
+        }
+
+        async Task RunSingleFileDownloadJobAsync(DownloadJob job, string url, string dest)
+        {
+            string? completedFolder = null;
+            string? completedLabel = null;
+            try
+            {
+                await _downloadSlots.WaitAsync();
+                try
+                {
+                    await DownloadWithRetriesAsync(job, url, dest);
+                    Interlocked.Increment(ref job.CompletedFiles);
+                }
+                finally { _downloadSlots.Release(); }
+
+                if (job.Key.StartsWith("launcher|", StringComparison.OrdinalIgnoreCase) &&
+                    dest.EndsWith(".7z", StringComparison.OrdinalIgnoreCase))
+                {
+                    var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(dest))!;
+                    SetDownloadActivity(job, "Extracting launcher", Path.GetFileName(dest));
+                    var extraction = await ExtractArchiveHereAsync(dest, outputDirectory);
+                    if (extraction.Success)
+                    {
+                        File.Delete(dest);
+                        SetDownloadActivity(job, "Launcher ready", outputDirectory);
+                        completedFolder = outputDirectory;
+                        completedLabel = "Launcher download complete";
+                    }
+                    else
+                    {
+                        SetDownloadActivity(job, "Launcher extraction failed", "Archive retained  •  " + extraction.Error);
+                        App.ReportError(new IOException(extraction.Error), "Launcher extraction failed");
+                        await Task.Delay(1800);
+                    }
+                }
+                else
+                {
+                    SetDownloadActivity(job, "Download complete", dest);
+                    completedFolder = Path.GetDirectoryName(Path.GetFullPath(dest));
+                    completedLabel = job.Key.StartsWith("launcher|", StringComparison.OrdinalIgnoreCase)
+                        ? "Launcher download complete"
+                        : "Download complete";
+                }
+            }
+            catch (Exception ex)
+            {
+                SetDownloadActivity(job, "Download failed", $"{Path.GetFileName(dest)}  •  {ex.Message}");
+                App.ReportError(ex, "Download failed");
+                await Task.Delay(1800);
+            }
+            finally
+            {
+                CompleteDownloadJob(job, completedFolder, completedLabel);
+            }
+        }
+
+        async Task RunGameDownloadJobAsync(
+            DownloadJob job, List<VersionItem> items, List<VersionItem> pending)
+        {
+            string? completedFolder = null;
+            string? completedLabel = null;
+            try
+            {
+                using var perJobSlots = new SemaphoreSlim(4, 4);
+                var tasks = pending.Select(async item =>
+                {
+                    await perJobSlots.WaitAsync();
+                    await _downloadSlots.WaitAsync();
+                    try
+                    {
+                        await DownloadWithRetriesAsync(job, item.Url, item.Dest);
+                        Interlocked.Increment(ref job.CompletedFiles);
+                    }
+                    finally
+                    {
+                        _downloadSlots.Release();
+                        perJobSlots.Release();
+                    }
+                });
+
+                await Task.WhenAll(tasks);
+
+                var extraction = await ExtractGameArchivesAsync(job, items);
+
+                var paks = items.Where(it =>
+                    it.RelPath.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)).ToList();
+                SetDownloadActivity(job, "Verifying game files", $"Checking {paks.Count} file(s)");
+                int mismatches = 0;
+                foreach (var item in paks)
+                {
+                    var expected = item.Size;
+                    long actual = File.Exists(item.Dest) ? new FileInfo(item.Dest).Length : -1;
+                    if (expected.HasValue && actual != expected.Value)
+                        mismatches++;
+                }
+
+                if (mismatches > 0)
+                {
+                    SetDownloadActivity(job, "Game verification failed", $"{mismatches} file(s) did not match");
+                    App.ReportError(new InvalidDataException($"{mismatches} downloaded file(s) did not match their manifest size."), "Game verification failed");
+                    await Task.Delay(1800);
+                }
+                else if (extraction.Failed > 0)
+                {
+                    SetDownloadActivity(job, "Download complete with extraction warnings", $"{extraction.Failed} archive(s) retained");
+                    App.ReportError(new IOException($"{extraction.Failed} archive(s) could not be extracted and were retained."), "Extraction warning");
+                    completedFolder = Path.GetDirectoryName(Path.GetFullPath(items[0].Dest));
+                    completedLabel = "Game downloaded with extraction warnings";
+                }
+                else
+                {
+                    var detail = extraction.Extracted > 0
+                        ? $"{extraction.Extracted} archive(s) extracted  •  {paks.Count} file(s) verified"
+                        : $"{paks.Count} file(s) verified";
+                    SetDownloadActivity(job, "Game download complete", detail);
+                    completedFolder = Path.GetDirectoryName(Path.GetFullPath(items[0].Dest));
+                    completedLabel = "Game download complete";
+                }
+            }
+            catch (Exception ex)
+            {
+                SetDownloadActivity(job, "Download failed", $"{job.Label}  •  {ex.Message}");
+                App.ReportError(ex, "Download failed");
+                await Task.Delay(1800);
+            }
+            finally
+            {
+                CompleteDownloadJob(job, completedFolder, completedLabel);
+            }
+        }
+
+        async Task DownloadWithRetriesAsync(
+            DownloadJob job, string url, string dest, int maxAttempts = 4)
+        {
+            Exception? lastError = null;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                long attemptBytes = 0;
+                try
+                {
+                    SetDownloadActivity(job, null);
+                    await DownloadFileAsync(url, dest, bytes =>
+                    {
+                        Interlocked.Add(ref attemptBytes, bytes);
+                        Interlocked.Add(ref job.CompletedBytes, bytes);
+                        Interlocked.Add(ref job.TransferredBytes, bytes);
+                    });
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Interlocked.Add(ref job.CompletedBytes, -Interlocked.Read(ref attemptBytes));
+                    if (attempt == maxAttempts) break;
+                    var timedOut = ex is TaskCanceledException or TimeoutException ||
+                                   ex.InnerException is TaskCanceledException or TimeoutException;
+                    SetDownloadActivity(job,
+                        timedOut ? "Connection timed out — retrying" : "Connection interrupted — retrying",
+                        $"{Path.GetFileName(dest)}  •  attempt {attempt + 1}/{maxAttempts}");
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt - 1)));
+                }
+            }
+
+            throw new IOException($"Failed after {maxAttempts} attempts", lastError);
+        }
+
         async Task LinkDownloaderAsync(string url)
         {
-            AppendText("  Listing files…", TC.Dim);
+            AppendText("  Listing filesâ€¦", TC.Dim);
             var (items, rootName) = await ListingAsync(url);
             if (items.Count == 0) { AppendText("  No files found.", TC.Warn); return; }
             Directory.CreateDirectory(rootName);
-            StartDlBar($"Downloading {items.Count} files", 0, items.Count);
-            var sem = new SemaphoreSlim(8, 8);
-            await Parallel.ForEachAsync(items,
-                new ParallelOptions { MaxDegreeOfParallelism = 8 },
-                async (item, _) =>
+
+            var files = items.Select(item =>
+            {
+                var path = new Uri(item.Url).AbsolutePath.TrimStart('/');
+                var dest = Path.Combine(rootName, path.Replace('/', Path.DirectorySeparatorChar));
+                return (item.Url, item.Size, Dest: dest);
+            }).ToList();
+            var pending = files.Where(file =>
+                !File.Exists(file.Dest) ||
+                (file.Size.HasValue && new FileInfo(file.Dest).Length != file.Size.Value)).ToList();
+            var total = files.All(file => file.Size.HasValue)
+                ? files.Sum(file => file.Size!.Value)
+                : 0;
+            var alreadyDone = files.Where(file => !pending.Contains(file) && file.Size.HasValue)
+                .Sum(file => file.Size!.Value);
+
+            if (pending.Count == 0)
+            {
+                AppendText("  All files are already downloaded.", TC.Ok);
+                return;
+            }
+
+            var job = TryStartDownloadJob(
+                $"link|{url.TrimEnd('/')}",
+                $"Downloading {items.Count} files",
+                pending.Select(file => file.Dest),
+                total,
+                files.Count,
+                alreadyDone,
+                files.Count - pending.Count);
+            if (job == null)
+            {
+                AppendText("  That download is already active.", TC.Warn);
+                return;
+            }
+
+            _ = RunLinkDownloadJobAsync(job, pending);
+            AppendText($"  Download started in the background: {items.Count} files", TC.Ok);
+        }
+
+        async Task RunLinkDownloadJobAsync(
+            DownloadJob job, List<(string Url, long? Size, string Dest)> pending)
+        {
+            try
+            {
+                using var perJobSlots = new SemaphoreSlim(4, 4);
+                var tasks = pending.Select(async file =>
                 {
-                    await sem.WaitAsync();
+                    await perJobSlots.WaitAsync();
+                    await _downloadSlots.WaitAsync();
                     try
                     {
-                        var path = new Uri(item.Url).AbsolutePath.TrimStart('/');
-                        var dest = Path.Combine(rootName, path.Replace('/', Path.DirectorySeparatorChar));
-                        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                        await DownloadFileAsync(item.Url, dest, _ => { });
-                        Interlocked.Increment(ref _dlFilesDone);
+                        await DownloadWithRetriesAsync(job, file.Url, file.Dest);
+                        Interlocked.Increment(ref job.CompletedFiles);
                     }
-                    catch { }
-                    finally { sem.Release(); }
+                    finally
+                    {
+                        _downloadSlots.Release();
+                        perJobSlots.Release();
+                    }
                 });
-            StopDlBar();
-            AppendText("  Download complete.", TC.Ok);
+                await Task.WhenAll(tasks);
+
+                Dispatcher.Invoke(() =>
+                {
+                    if (CanClearLogFor(job)) ClearTerminal();
+                    AppendText("  Download complete.", TC.Ok);
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                    AppendText($"  Download failed ({job.Label}): {ex.Message}", TC.Warn));
+                App.ReportError(ex, "Download failed");
+            }
+            finally
+            {
+                CompleteDownloadJob(job);
+            }
         }
 
         async Task<(List<(string Url, long? Size)> items, string rootName)> ListingAsync(string url)
@@ -1722,6 +3499,269 @@ namespace StrinowaWPF
             return (items, root);
         }
 
+        async Task RunAdvancedBruteforceAsync(
+            string branch,
+            string source,
+            string startV,
+            string finishV,
+            bool launcherMode,
+            bool saveTxt)
+        {
+            if (string.IsNullOrWhiteSpace(branch))
+            {
+                AppendText("  Bruteforce channel is empty.", TC.Warn);
+                return;
+            }
+            if (!IsValidVersion(startV) || !IsValidVersion(finishV))
+            {
+                AppendText("  invalid version format", TC.Warn);
+                return;
+            }
+
+            var (a1, b1, c1, _) = ParseVer(startV);
+            var (a2, b2, c2, _) = ParseVer(finishV);
+            if (a1 != a2 || b1 != b2 || c1 != c2)
+            {
+                AppendText("  advanced bruteforce only varies the 4th version segment.", TC.Warn);
+                return;
+            }
+
+            source = source.ToLowerInvariant();
+            if (source is not ("os" or "cn" or "pc"))
+            {
+                AppendText("  invalid source - choose OS, CN, or PC", TC.Warn);
+                return;
+            }
+
+            _bruteCts?.Cancel();
+            _bruteCts?.Dispose();
+            _bruteCts = new CancellationTokenSource();
+            var token = _bruteCts.Token;
+
+            var seq = BuildAdvancedVersionSeq(startV, finishV);
+            int total = seq.Count, ok = 0, skip = 0, err = 0, done = 0;
+            var found = new List<(string ver, string url, string mode, string source, string branch)>();
+            var started = DateTime.UtcNow;
+
+            AppendLine([]);
+            AppendLine([
+                new("  Bruteforcing", TC.Bold, true),
+                new("  ", TC.Dim),
+                new(launcherMode ? "Launcher" : "Game", TC.Release, true),
+                new($"  {branch}  {source.ToUpper()}  {startV} - {finishV}", TC.Dim),
+            ]);
+            AppendLine([]);
+
+            StartBruteProgress($"{startV} - {finishV}", total);
+
+            foreach (var ver in seq)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var url = BuildBruteforceProbeUrl(branch, source, ver, launcherMode);
+                done++;
+                try
+                {
+                    bool exists;
+                    if (launcherMode)
+                    {
+                        var (probeOk, _) = await ProbeUrlAsync(url);
+                        exists = probeOk;
+                    }
+                    else
+                    {
+                        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
+                        var body = await resp.Content.ReadAsStringAsync(token);
+                        exists = resp.IsSuccessStatusCode
+                            && !body.Contains("NoSuchKey")
+                            && !body.Contains("does not exist");
+                    }
+
+                    if (exists)
+                    {
+                        ok++;
+                        found.Add((ver, url, launcherMode ? "Launcher" : "Game", source.ToUpper(), branch));
+                        AppendLine([
+                            new("Found: ", TC.Normal, true),
+                            new(ver, TC.Ok, true),
+                        ]);
+                    }
+                }
+                catch (TaskCanceledException) when (!token.IsCancellationRequested)
+                {
+                    skip++;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch
+                {
+                    err++;
+                }
+
+                UpdateBruteProgress(done, total, $"{startV} - {finishV}", ok, started);
+                try
+                {
+                    await Task.Delay(launcherMode ? 300 : 200, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+
+            StopBruteProgress();
+
+            if (token.IsCancellationRequested)
+            {
+                AppendText("  Bruteforce cancelled.", TC.Warn);
+                return;
+            }
+
+            AppendLine([]);
+            AppendLine([
+                new("  found: ", TC.Dim), new(ok.ToString(), TC.Ok, true),
+                new($" / {total}", TC.Dim),
+                new("  timeout: ", TC.Dim), new(skip.ToString(), skip > 0 ? TC.Warn : TC.Dim, skip > 0),
+                new("  error: ", TC.Dim), new(err.ToString(), err > 0 ? TC.Warn : TC.Dim, err > 0),
+            ]);
+
+            if (saveTxt && found.Count > 0)
+                SaveBruteforceTxt(source, startV, finishV, ok, total, skip, err, found);
+            if (_cfg.WinBuildScan && found.Count > 0)
+                SaveWinBuildsXml(found);
+        }
+
+        List<string> BuildAdvancedVersionSeq(string startV, string finishV)
+        {
+            var (a1, b1, c1, d1) = ParseVer(startV);
+            var (_, _, _, d2) = ParseVer(finishV);
+            bool down = d1 > d2;
+            var seq = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            for (int d = d1; down ? d >= d2 : d <= d2; d += down ? -1 : 1)
+            {
+                foreach (var tail in BuildNumberVariants(d))
+                {
+                    var ver = $"{a1}.{b1}.{c1}.{tail}";
+                    if (seen.Add(ver)) seq.Add(ver);
+                }
+            }
+            return seq;
+        }
+
+        static IEnumerable<string> BuildNumberVariants(int value)
+        {
+            yield return value.ToString("0000");
+            yield return value.ToString("000");
+            yield return value.ToString("00");
+            yield return value.ToString("0");
+        }
+
+        string BuildBruteforceProbeUrl(string branch, string source, string version, bool launcherMode)
+        {
+            var vt = ParseVer(version);
+            var root = launcherMode
+                ? source switch { "cn" => CN_ROOT, "pc" => PC_ROOT, _ => OS_ROOT }
+                : ChooseRootGame(source, vt);
+            return launcherMode
+                ? $"{root}/{branch}/{version}/full_{version}.7z"
+                : $"{root}/{branch}/{version}/full_zip/manifest.txt";
+        }
+
+        void StartBruteProgress(string range, int total)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _bruteOwnsDownloadPanel = ActiveDownloads().Length == 0;
+                if (!_bruteOwnsDownloadPanel) return;
+                _dlTimer?.Stop();
+                _dlTimer = null;
+                DlLabel.Text = "Bruteforcing";
+                DlStats.Text = "";
+                DlSubLabel.Text = range;
+                DlEta.Text = "";
+                DlFill.Width = 0;
+                DownloadPanel.Visibility = Visibility.Visible;
+            });
+        }
+
+        void UpdateBruteProgress(int done, int total, string range, int found, DateTime started)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (!_bruteOwnsDownloadPanel) return;
+                var frac = total > 0 ? Math.Min(1.0, (double)done / total) : 0;
+                var trackW = Math.Max(0, DownloadPanel.ActualWidth - 28);
+                DlFill.Width = frac * trackW;
+                DlSubLabel.Text = $"{range}     Found: {found}";
+                var elapsed = Math.Max(0.1, (DateTime.UtcNow - started).TotalSeconds);
+                var per = done / elapsed;
+                var eta = per > 0 ? TimeSpan.FromSeconds((total - done) / per) : TimeSpan.Zero;
+                DlEta.Text = $"ETA: {eta:mm\\m\\ ss\\s}";
+            });
+        }
+
+        void StopBruteProgress()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (!_bruteOwnsDownloadPanel) return;
+                _bruteOwnsDownloadPanel = false;
+                DownloadPanel.Visibility = Visibility.Collapsed;
+                DlFill.Width = 0;
+            });
+        }
+
+        void SaveBruteforceTxt(
+            string source,
+            string startV,
+            string finishV,
+            int ok,
+            int total,
+            int skip,
+            int err,
+            List<(string ver, string url, string mode, string source, string branch)> found)
+        {
+            var shortVer = string.Join(".", startV.Split('.').Take(3));
+            var fname = $"StrinowaF1-{source.ToUpper()}-{shortVer}.txt";
+            try
+            {
+                var lines = new List<string>
+                {
+                    $"Strinowa Advanced Bruteforce - {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+                    $"Branch: {found[0].branch}  Source: {source.ToUpper()}  Range: {startV} -> {finishV}",
+                    $"Found: {ok}/{total}  Timeouts: {skip}  Errors: {err}",
+                    new string('─', 66),
+                };
+                foreach (var hit in found)
+                    lines.Add($"{hit.ver,-22}  {hit.url}");
+                File.WriteAllLines(fname, lines, Encoding.UTF8);
+                AppendLine([new("  saved -> ", TC.Dim), new(fname, TC.Ok)]);
+            }
+            catch (Exception ex)
+            {
+                AppendText($"  save failed: {ex.Message}", TC.Warn);
+                ShowModernError(ex, "Save failed");
+            }
+        }
+
+        void SaveWinBuildsXml(List<(string ver, string url, string mode, string source, string branch)> found)
+        {
+            try
+            {
+                WinBuildCatalog.Upsert(found.Select(hit => new WinBuildEntry(
+                    hit.ver, hit.branch, hit.source, hit.mode, hit.url, DateTime.UtcNow)));
+            }
+            catch (Exception ex)
+            {
+                AppendText($"  XML save failed: {ex.Message}", TC.Warn);
+                ShowModernError(ex, "WinBuilds save failed");
+            }
+        }
+
         async Task RunBruteforceAsync(string branch)
         {
             AppendLine([]);
@@ -1733,7 +3773,7 @@ namespace StrinowaWPF
             var srcRaw = (await AskInput("<OS / CN / PC />")).Trim().ToLower();
             if (!new[] { "os", "cn", "pc", "qq" }.Contains(srcRaw)) //might as well remove QQ but claude said no
             {
-                AppendLine([new("  invalid source — must be os, cn, pc or qq", TC.Warn)]);
+                AppendLine([new("  invalid source â€” must be os, cn, pc or qq", TC.Warn)]);
                 return;
             }
             var source = srcRaw;
@@ -1754,8 +3794,8 @@ namespace StrinowaWPF
             AppendLine([]);
             AppendLine([
                 new("  branch  ", TC.Dim), new(branch,           TC.Release, true),
-                new("  ·  ", TC.Dim),      new(source.ToUpper(), TC.Normal,  true),
-                new($"  ·  {total} version{(total == 1 ? "" : "s")}  ·  {startV} → {finishV}", TC.Dim),
+                new("  Â·  ", TC.Dim),      new(source.ToUpper(), TC.Normal,  true),
+                new($"  Â·  {total} version{(total == 1 ? "" : "s")}  Â·  {startV} â†’ {finishV}", TC.Dim),
             ]);
             AppendLine([]);
             AppendLine([new("  version              status      url", TC.Dim)]);
@@ -1828,15 +3868,15 @@ namespace StrinowaWPF
                 {
                     var lines = new System.Collections.Generic.List<string>
                     {
-                        $"Strinowa Bruteforce — {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
-                        $"Branch: {branch}  Source: {source.ToUpper()}  Range: {startV} → {finishV}",
+                        $"Strinowa Bruteforce â€” {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+                        $"Branch: {branch}  Source: {source.ToUpper()}  Range: {startV} â†’ {finishV}",
                         $"Found: {ok}/{total}  Timeouts: {skip}  Errors: {err}",
                         new string('─', 66),
                     };
                     foreach (var (v, u) in found)
                         lines.Add($"{v,-22}  {u}");
                     File.WriteAllLines(fname, lines, System.Text.Encoding.UTF8);
-                    AppendLine([new("  saved  →  ", TC.Dim), new(fname, TC.Ok)]);
+                    AppendLine([new("  saved  â†’  ", TC.Dim), new(fname, TC.Ok)]);
                 }
                 catch (Exception ex)
                 {
@@ -1893,15 +3933,15 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
         async Task RunBruteforceLauncherAsync(string branch) // i made claude do this part. source match later and fix speeds 2026-06-15
         {
             AppendLine([]);
-            AppendLine([new("  ┌─────────────────────────────────────────────────┐", TC.Pink)]);
-            AppendLine([new("  │  LAUNCHER BRUTEFORCE                            │", TC.Pink)]);
-            AppendLine([new("  └─────────────────────────────────────────────────┘", TC.Pink)]);
+            AppendLine([new("  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”", TC.Pink)]);
+            AppendLine([new("  â”‚  LAUNCHER BRUTEFORCE                            â”‚", TC.Pink)]);
+            AppendLine([new("  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜", TC.Pink)]);
             AppendLine([]);
 
             var srcRaw = (await AskInput("  source  [OS / CN / PC / QQ] >")).Trim().ToLower();
             if (!new[] { "os", "cn", "pc", "qq" }.Contains(srcRaw))
             {
-                AppendLine([new("  invalid source — must be os, cn, pc or qq", TC.Warn)]);
+                AppendLine([new("  invalid source â€” must be os, cn, pc or qq", TC.Warn)]);
                 return;
             }
             var source = srcRaw;
@@ -1922,7 +3962,7 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             // validate same major.minor.patch
             if (a1 != a2 || b1 != b2 || c1 != c2)
             {
-                AppendLine([new("  launcher bruteforce only varies the 4th version segment — use matching a.b.c prefix", TC.Warn)]);
+                AppendLine([new("  launcher bruteforce only varies the 4th version segment â€” use matching a.b.c prefix", TC.Warn)]);
                 return;
             }
 
@@ -1934,8 +3974,8 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             AppendLine([]);
             AppendLine([
                 new("  branch  ", TC.Dim), new(branch,           TC.Release, true),
-                new("  ·  ", TC.Dim),      new(source.ToUpper(), TC.Normal,  true),
-                new($"  ·  {total} version{(total == 1 ? "" : "s")}  ·  {startV} → {finishV}", TC.Dim),
+                new("  Â·  ", TC.Dim),      new(source.ToUpper(), TC.Normal,  true),
+                new($"  Â·  {total} version{(total == 1 ? "" : "s")}  Â·  {startV} â†’ {finishV}", TC.Dim),
             ]);
             AppendLine([]);
             AppendLine([new("  version              status      url", TC.Dim)]);
@@ -2006,15 +4046,15 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                 {
                     var lines = new System.Collections.Generic.List<string>
                     {
-                        $"Strinowa Launcher Bruteforce — {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
-                        $"Branch: {branch}  Source: {source.ToUpper()}  Range: {startV} → {finishV}",
+                        $"Strinowa Launcher Bruteforce â€” {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+                        $"Branch: {branch}  Source: {source.ToUpper()}  Range: {startV} â†’ {finishV}",
                         $"Found: {ok}/{total}  Timeouts: {skip}  Errors: {err}",
                         new string('─', 66),
                     };
                     foreach (var (v, u) in found)
                         lines.Add($"{v,-22}  {u}");
                     File.WriteAllLines(fname, lines, System.Text.Encoding.UTF8);
-                    AppendLine([new("  saved  →  ", TC.Dim), new(fname, TC.Ok)]);
+                    AppendLine([new("  saved  â†’  ", TC.Dim), new(fname, TC.Ok)]);
                 }
                 catch (Exception ex)
                 {
@@ -2086,6 +4126,10 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                 }
                 return ParseIndexText(text);
             }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return (new(), new());
+            }
             catch (Exception ex)
             {
                 AppendText($"  manifest fetch failed: {ex.Message}", TC.Warn);
@@ -2122,18 +4166,14 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                     var parts = ln.Split('|');
                     if (parts.Length < 2) continue;
 
-                    // LHS is "from_ver->to_ver" — use the right side (to_ver)
                     var lhs = parts[0].Split(new[] { "->", "-&gt;" }, StringSplitOptions.None);
                     var ver = (lhs.Length >= 2 ? lhs[1] : lhs[0]).Trim();
 
-                    // RHS path: /Launcher/<ver>/full_<ver>.7z  OR  /<subfolder>/<ver>/filename
                     var rel = parts[1].Trim().TrimStart('/');
                     var segs = rel.Split('/');
                     if (segs.Length < 2) continue;
 
                     var folder = segs[0]; // "Launcher" for launcher, branch subfolder for game
-                    // If first path segment is "Launcher" (case-insensitive), the version is segs[1]
-                    // and we register it under the "Launcher" key which maps to the branch being scanned
                     if (folder.Equals("Launcher", StringComparison.OrdinalIgnoreCase))
                     {
                         var actualVer = IsValidVersion(ver) ? ver : (segs.Length > 1 ? segs[1] : ver);
@@ -2259,10 +4299,9 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
         {
             var parts = s.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
             bool gb = false, lb = false;
-            while (parts.Count > 0 && parts[^1].ToLower() is "-b" or "-lb")
+            while (parts.Count > 0 && parts[^1].ToLower() is "-b")
             {
-                if (parts[^1].ToLower() == "-lb") lb = true;
-                else gb = true;
+                gb = true;
                 parts.RemoveAt(parts.Count - 1);
             }
             if (parts.Count == 0) return (null, null, null, gb, lb);
@@ -2284,11 +4323,202 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             (s.Contains('_') || (s.StartsWith("Game", StringComparison.OrdinalIgnoreCase) && s.Length >= 5)
                              || (s.StartsWith("Launcher", StringComparison.OrdinalIgnoreCase) && s.Length >= 9));
 
+        void SetDebugOverlayVisible(bool visible)
+        {
+            _debugVisible = visible;
+            DebugOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            if (!visible)
+            {
+                StopDebugOverlay();
+                return;
+            }
+
+            _debugLastSampleUtc = DateTime.UtcNow;
+            _debugLastTransferred = ActiveDownloads().Sum(job => Interlocked.Read(ref job.TransferredBytes));
+            using (var process = Process.GetCurrentProcess())
+            {
+                process.Refresh();
+                _debugLastCpuTime = process.TotalProcessorTime;
+            }
+            _debugTimer ??= new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(750),
+            };
+            _debugTimer.Tick -= DebugTimer_Tick;
+            _debugTimer.Tick += DebugTimer_Tick;
+            _debugTimer.Start();
+            UpdateDebugOverlay();
+        }
+
+        void StopDebugOverlay()
+        {
+            if (_debugTimer == null) return;
+            _debugTimer.Stop();
+            _debugTimer.Tick -= DebugTimer_Tick;
+            _debugTimer = null;
+        }
+
+        void DebugTimer_Tick(object? sender, EventArgs e) => UpdateDebugOverlay();
+
+        void UpdateDebugOverlay()
+        {
+            if (!_debugVisible || !IsLoaded) return;
+            try
+            {
+                var now = DateTime.UtcNow;
+                var sampleSeconds = Math.Max(0.001, (now - _debugLastSampleUtc).TotalSeconds);
+                _debugUiLagMs = Math.Max(0, sampleSeconds * 1000 - 750);
+
+                var jobs = ActiveDownloads();
+                var transferred = jobs.Sum(job => Interlocked.Read(ref job.TransferredBytes));
+                var completed = jobs.Sum(job => Interlocked.Read(ref job.CompletedBytes));
+                var total = jobs.Sum(job => job.TotalBytes);
+                var instantBytesPerSecond = jobs.Length == 0
+                    ? 0
+                    : Math.Max(0, transferred - _debugLastTransferred) / sampleSeconds;
+
+                int destinationCount;
+                lock (_downloadJobsLock) destinationCount = _activeDownloadDestinations.Count;
+
+                ThreadPool.GetAvailableThreads(out var availableWorkers, out var availableIo);
+                ThreadPool.GetMaxThreads(out var maxWorkers, out var maxIo);
+                var gc = GC.GetGCMemoryInfo();
+                var managed = GC.GetTotalMemory(false);
+
+                using var process = Process.GetCurrentProcess();
+                process.Refresh();
+                var cpuDelta = (process.TotalProcessorTime - _debugLastCpuTime).TotalSeconds;
+                var cpuPercent = Math.Max(0, cpuDelta / sampleSeconds / Environment.ProcessorCount * 100);
+
+                var text = new StringBuilder(1600);
+                text.AppendLine("STRINOWA DEBUG  [Ctrl+F9+F10]");
+                text.AppendLine($"uptime {_debugUptime.Elapsed:dd\\.hh\\:mm\\:ss} | theme {AppTheme.CurrentTheme} | scale {CurrentUiScale}% | UI lag {_debugUiLagMs:F1} ms");
+                text.AppendLine($"CPU {cpuPercent:F1}% | process threads {process.Threads.Count} | handles {process.HandleCount}");
+                text.AppendLine($"working {DebugBytes(process.WorkingSet64)} | private {DebugBytes(process.PrivateMemorySize64)} | virtual {DebugBytes(process.VirtualMemorySize64)}");
+                text.AppendLine($"managed {DebugBytes(managed)} | heap {DebugBytes(gc.HeapSizeBytes)} | fragmented {DebugBytes(gc.FragmentedBytes)}");
+                text.AppendLine($"memory load {DebugBytes(gc.MemoryLoadBytes)} / {DebugBytes(gc.HighMemoryLoadThresholdBytes)} | available {DebugBytes(gc.TotalAvailableMemoryBytes)}");
+                text.AppendLine($"GC collections G0/G1/G2 {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)} | finalizers pending {GC.GetGCMemoryInfo().FinalizationPendingCount}");
+                text.AppendLine($"thread pool workers {maxWorkers - availableWorkers}/{maxWorkers} | IO {maxIo - availableIo}/{maxIo} | pool threads {ThreadPool.ThreadCount}");
+                text.AppendLine($"pool pending {ThreadPool.PendingWorkItemCount:N0} | completed {ThreadPool.CompletedWorkItemCount:N0} | UI thread {Environment.CurrentManagedThreadId}");
+                text.AppendLine();
+                text.AppendLine($"downloads {jobs.Length} | destinations {destinationCount} | global slots {8 - _downloadSlots.CurrentCount}/8 | paused {_isPaused}");
+                text.AppendLine($"instant {DebugBytes((long)instantBytesPerSecond)}/s | transferred {DebugBytes(transferred)} | progress {DebugBytes(completed)} / {(total > 0 ? DebugBytes(total) : "unknown")}");
+                foreach (var job in jobs.Take(6))
+                {
+                    var age = Math.Max(0.001, (now - job.StartedUtc).TotalSeconds);
+                    var jobTransferred = Interlocked.Read(ref job.TransferredBytes);
+                    var jobCompleted = Interlocked.Read(ref job.CompletedBytes);
+                    var files = Volatile.Read(ref job.CompletedFiles);
+                    text.AppendLine($"  {job.Label}");
+                    text.AppendLine($"    {files}/{job.FileCount} files | {DebugBytes(jobCompleted)}/{(job.TotalBytes > 0 ? DebugBytes(job.TotalBytes) : "?")} | avg {DebugBytes((long)(jobTransferred / age))}/s");
+                }
+                if (jobs.Length > 6) text.AppendLine($"  ...and {jobs.Length - 6} more jobs");
+                text.AppendLine();
+                text.AppendLine($"state busy {_busy} | prompt {(_promptSem != null ? _promptMode : "none")} | scanner {_manifestScanner?.IsVisible == true} | brute {_bruteCts != null}");
+                text.AppendLine($"terminal blocks {TerminalBox.Document.Blocks.Count} | history {_history.Count} | devkit animators {_terminalDevkitWaves.Count}");
+                text.AppendLine($"timers download {_dlTimer?.IsEnabled == true} | debug {_debugTimer?.IsEnabled == true} | dispatcher shutdown {Dispatcher.HasShutdownStarted}");
+
+                DebugText.Text = text.ToString();
+                _debugLastTransferred = transferred;
+                _debugLastSampleUtc = now;
+                _debugLastCpuTime = process.TotalProcessorTime;
+            }
+            catch (Exception ex)
+            {
+                DebugText.Text = $"STRINOWA DEBUG\nDiagnostics sampling failed: {ex.Message}";
+            }
+        }
+
+        static string DebugBytes(long bytes)
+        {
+            string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
+            double value = Math.Max(0, bytes);
+            var unit = 0;
+            while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
+            return $"{value:F1} {units[unit]}";
+        }
+
+        void Window_PreviewKeyUp(object sender, KeyEventArgs e)
+        {
+            if (e.Key is Key.F9 or Key.F10 ||
+                !Keyboard.IsKeyDown(Key.LeftCtrl) && !Keyboard.IsKeyDown(Key.RightCtrl))
+                _debugChordLatched = false;
+        }
+
+        void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.Up or Key.Down)
+            {
+                NavigateCommandHistory(e.Key == Key.Up);
+                e.Handled = true;
+                return;
+            }
+
+            bool ctrl = Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl);
+            bool debugChord = ctrl && Keyboard.IsKeyDown(Key.F9) && Keyboard.IsKeyDown(Key.F10);
+            if (debugChord)
+            {
+                if (!_debugChordLatched)
+                {
+                    _debugChordLatched = true;
+                    SetDebugOverlayVisible(!_debugVisible);
+                }
+                e.Handled = true;
+                return;
+            }
+            if (ctrl && e.Key == Key.D)
+            {
+                e.Handled = true;
+                EnableDevkits();
+                return;
+            }
+            if (e.Key != Key.B || !ctrl || !Keyboard.IsKeyDown(Key.A)) return;
+
+            e.Handled = true;
+            if (_manifestScanner == null || !_manifestScanner.IsVisible)
+            {
+                _manifestScanner = new Manifest(_cfg.WinBuildScan);
+                _manifestScanner.Closed += (_, _) => _manifestScanner = null;
+                _manifestScanner.Show();
+            }
+            else
+            {
+                _manifestScanner.Activate();
+            }
+        }
         void PauseBtn_Click(object s, RoutedEventArgs e)
         {
             TogglePause();
             PauseBtn.Content = _isPaused ? "\uE768" : "\uE769";
             PauseBtn.ToolTip = _isPaused ? Strings.Get("resume") : Strings.Get("pause");
+        }
+
+        public void EnableDevkits()
+        {
+            if (_cfg.ShowDevkits) return;
+            _cfg.ShowDevkits = true;
+            AppSettings.ShowDevkits = true;
+            _cfg.Save();
+            ShowClipboardToast("Devkit builds permanently enabled");
+        }
+
+        void DownloadCompleteCloseBtn_Click(object sender, RoutedEventArgs e)
+        {
+            _downloadCompletionVisible = false;
+            _completedDownloadFolder = null;
+            DownloadCompletionActions.Visibility = Visibility.Collapsed;
+            UpdateDlBar(null, EventArgs.Empty);
+        }
+
+        void DownloadOpenFolderBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_completedDownloadFolder) ||
+                !Directory.Exists(_completedDownloadFolder)) return;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = _completedDownloadFolder,
+                UseShellExecute = true,
+            });
         }
 
         void ReportBugBtn_Click(object s, RoutedEventArgs e)
@@ -2302,15 +4532,15 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
 
         void CloseBtn_Click(object s, RoutedEventArgs e)
         {
-            _cfg.Width = (int)(ActualWidth - 16);
-            _cfg.Height = (int)(ActualHeight - 16);
+            _cfg.Width = Math.Max(560, (int)Math.Round(ActualWidth / _uiScale - WindowFrameAllowance));
+            _cfg.Height = Math.Max(380, (int)Math.Round(ActualHeight / _uiScale - WindowFrameAllowance));
             _cfg.Theme = AppTheme.CurrentTheme.ToString();
             _cfg.Color = AppTheme.CurrentTermPreset.ToString();
             _cfg.Lang = Strings.Lang.ToString();
             _cfg.ClearLog = AppSettings.ClearLogOnFinish;
             _cfg.SaveBrf = AppSettings.SaveBruteforceToFile;
             _cfg.SpeedKBs = AppSettings.SpeedLimitKBs;
-            _cfg.FmtAsked = AppSettings.LauncherFormatAsked;
+            _cfg.UiScale = CurrentUiScale;
             _cfg.Fmt7z = AppSettings.LauncherDefault7z;
             _cfg.FmtExe = AppSettings.LauncherDefaultExe;
             _cfg.Save();
@@ -2327,28 +4557,58 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             else DragMove();
         }
         void Window_MouseLeftButtonDown(object s, MouseButtonEventArgs e) { }
-        void Window_SizeChanged(object s, SizeChangedEventArgs e) { }
+        void Window_SizeChanged(object s, SizeChangedEventArgs e) => UpdateWindowClip();
         void LogoBtn_Click(object s, RoutedEventArgs e)
         {
-            var dlg = new AboutWindow { Owner = this };
-            dlg.ShowDialog();
+            var dlg = new About();
+            dlg.Show();
         }
 
         void SettingsBtn_Click(object s, RoutedEventArgs e)
         {
-            var dlg = new SettingsWindow { Owner = this };
-            dlg.ShowDialog();
+            var dlg = new SettingsWindow(this);
+            dlg.Closed += (_, _) => Dispatcher.BeginInvoke(ApplyTheme, DispatcherPriority.Loaded);
+            dlg.Show();
         }
 
         /*
         void GameBtn_Click(object s, RoutedEventArgs e)
         {
-            var dlg = new GameWindow { Owner = this };
-            dlg.ShowDialog();
+            var dlg = new GameWindow();
+            dlg.Show();
         }
         */
     }
 
+    sealed class DevkitTerminalWave
+    {
+        readonly System.Windows.Documents.Span _target;
+        readonly string _text;
+        readonly DispatcherTimer _timer;
+        TermColorPreset _preset;
+        double _phase;
+
+        public DevkitTerminalWave(System.Windows.Documents.Span target, string text, TermColorPreset preset)
+        {
+            _target = target; _text = text; _preset = preset;
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            _timer.Tick += (_, _) => Draw();
+            _timer.Start(); Draw();
+        }
+        public void SetPreset(TermColorPreset preset) { _preset = preset; Draw(); }
+        void Draw()
+        {
+            _phase = (_phase + 0.12) % (Math.PI * 2);
+            var hi = _preset == TermColorPreset.PinkAccent ? Color.FromRgb(0xFF, 0x00, 0x4D) : Color.FromRgb(0xFF, 0xFF, 0xFF);
+            var lo = _preset == TermColorPreset.PinkAccent ? Color.FromRgb(0x61, 0x0E, 0x60) : Color.FromRgb(0x55, 0x55, 0x66);
+            _target.Inlines.Clear();
+            for (var i = 0; i < _text.Length; i++)
+            {
+                var mix = (Math.Sin(_phase + i * 0.55) + 1.0) / 2.0;
+                _target.Inlines.Add(new System.Windows.Documents.Run(_text[i].ToString()) { Foreground = new SolidColorBrush(Color.FromRgb((byte)(lo.R + (hi.R - lo.R) * mix), (byte)(lo.G + (hi.G - lo.G) * mix), (byte)(lo.B + (hi.B - lo.B) * mix))) });
+            }
+        }
+    }
     class VersionComparer : IComparer<string>
     {
         public int Compare(string? x, string? y)
@@ -2372,11 +4632,21 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
         string? HiddenVersion,
         Dictionary<string, (string root, List<string> vers, Dictionary<string, string> types,
             Dictionary<string, DateTime?> dates, Dictionary<string, bool> exists,
-            Dictionary<string, string> choice)> Maps);
+            Dictionary<string, string> choice)> Maps,
+        Dictionary<string, List<AllDownloadChoice>>? MultiChoices = null);
 
     record BuildResult(
         Dictionary<string, string> Types,
         Dictionary<string, DateTime?> Dates,
         Dictionary<string, bool> Exists,
         Dictionary<string, string> Choice);
+
+    sealed record ChinaBuildStatus(bool Exists, DateTime? Date);
+    sealed record AllBuildSeed(string Version, string DisplayBranch, string ResolvedBranch, string Source, bool Hidden);
+    sealed record AllBuildProbe(bool Exists, DateTime? Date, string Type);
+    sealed record AllBuildOccurrence(AllBuildSeed Seed, AllBuildProbe Probe);
+    sealed record AllBuildGroup(string Version, AllBuildOccurrence Primary, List<string> Branches,
+        bool Hidden, bool Exists, DateTime? Date);
+    sealed record AllDownloadChoice(string Version, string DisplayBranch, string ResolvedBranch,
+        string Source, DateTime? Date, bool Hidden, bool Exists, long? Size);
 }
