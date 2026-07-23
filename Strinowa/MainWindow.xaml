@@ -1,11 +1,14 @@
 ﻿<Window x:Class="StrinowaWPF.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Strinowa v0.72"
+        Title="Strinowa v0.77.90"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
         ResizeMode="CanResize"
+        Width="900"
+        Height="560"
+        WindowStartupLocation="CenterScreen"
         MinWidth="760"
         MinHeight="380"
         Loaded="Window_Loaded"
@@ -364,7 +367,7 @@
                         </Button>
                         <!-- you have to make sure to Quick Replace all version references in the project. To prevent et -->
                         <TextBlock x:Name="TitleVersionText"
-               Text="Strinowa v0.72" 
+               Text="Strinowa v0.77.90" 
                FontFamily="Segoe UI Variable Display, Segoe UI"
                FontSize="13"
                FontWeight="SemiBold"
@@ -382,6 +385,16 @@
             ToolTip="Report a bug or an issue"
             Margin="2,0,0,0"
             Click="ReportBugBtn_Click"/>
+
+                        <!-- Bookmark feature disabled for now.
+                        <Button x:Name="BookmarkBtn"
+            Style="{StaticResource TitleSettingsBtn}"
+            Content="☆"
+            FontFamily="Segoe UI Symbol"
+            ToolTip="Bookmarks"
+            Margin="2,0,0,0"
+            Click="BookmarkBtn_Click"/>
+                        -->
 
                     </StackPanel>
 
@@ -435,6 +448,8 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="DlLabel"
                                    Grid.Column="0"
@@ -482,9 +497,9 @@
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
-                        <Button x:Name="DownloadCancelBtn" Grid.Column="2"
+                        <Button x:Name="DownloadCancelBtn" Grid.Column="3"
                                 Content="Cancel" Visibility="Collapsed"
-                                Width="68" Height="26" Margin="0,0,112,0"
+                                Width="68" Height="26" Margin="0,0,8,0"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Background="#3A3A42" Foreground="#D0D0D5" BorderThickness="0"
                                 FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="11"
@@ -501,7 +516,7 @@
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
-                        <Button x:Name="DownloadConfirmBtn" Grid.Column="2"
+                        <Button x:Name="DownloadConfirmBtn" Grid.Column="4"
                                 Content="Download" Visibility="Collapsed"
                                 MinWidth="104" Height="30" Padding="16,0"
                                 Background="#DC3278" Foreground="White" BorderThickness="0"
@@ -774,10 +789,10 @@
                         </Grid.ColumnDefinitions>
 
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Bruteforce tool" Foreground="{DynamicResource ControlTextBrush}"
+                            <TextBlock Text="Build scanner" Foreground="{DynamicResource ControlTextBrush}"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="11" FontWeight="Bold"/>
-                            <TextBlock Text="v1.11" Foreground="#999999"
+                            <TextBlock Text="v0.77.90" Foreground="#999999"
                                        FontFamily="Cascadia Mono, Consolas, Courier New"
                                        FontSize="11"/>
                         </StackPanel>

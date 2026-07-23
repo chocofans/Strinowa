@@ -27,6 +27,39 @@ internal static class AppPaths
     }
 }
 
+internal static class LauncherIdentity
+{
+    public const string BrandVersion = "0.77.90";
+    public const string BuildNumber = "0723";
+    public const string BuildDate = "20260723";
+    public const string BuildTime = "1216";
+    public const string AboutVersionEnglish = "Version 0.77.90.0723.20260723.1216 Beta";
+    public const string AboutVersionChinese = "\u7248\u672c 0.77.90.0723.20260723.1216 \u6d4b\u8bd5\u7248";
+    public const string AboutVersionPolish = "Wersja 0.77.90.0723.20260723.1216 Beta";
+    public const string UserAgent = "Strinowa-WPF-Downloader/0.77.90";
+}
+
+internal static class WindowScale
+{
+    public static int Clamp(int percent) => Math.Clamp(percent, 50, 200);
+
+    public static void Apply(Window window, FrameworkElement root, int percent, double baseWidth, double baseHeight)
+    {
+        var scale = Clamp(percent) / 100.0;
+        var centerX = double.IsNaN(window.Left) ? double.NaN : window.Left + window.Width / 2;
+        var centerY = double.IsNaN(window.Top) ? double.NaN : window.Top + window.Height / 2;
+
+        root.LayoutTransform = new ScaleTransform(scale, scale);
+        window.Width = baseWidth * scale;
+        window.Height = baseHeight * scale;
+        window.MinWidth = baseWidth * scale;
+        window.MinHeight = baseHeight * scale;
+
+        if (!double.IsNaN(centerX)) window.Left = centerX - window.Width / 2;
+        if (!double.IsNaN(centerY)) window.Top = centerY - window.Height / 2;
+    }
+}
+
 internal static class SoundEffects
 {
     static readonly object Gate = new();

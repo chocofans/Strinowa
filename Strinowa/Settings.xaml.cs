@@ -215,7 +215,7 @@ namespace StrinowaWPF
 
         static readonly Dictionary<string, string> _en = new() //the ai did the translations. sorry if they are poor.
         {
-            ["title"] = "Strinowa v0.72",
+            ["title"] = "Strinowa v0.77.90",
             ["settings"] = "Settings",
             ["about"] = "About",
             ["launcher_theme"] = "LAUNCHER THEME",
@@ -243,12 +243,17 @@ namespace StrinowaWPF
             ["options"] = "OPTIONS",
             ["clear_log"] = "Clear log when download finishes",
             ["save_bruteforce"] = "Save bruteforce results to file",
+            ["download_locations"] = "DOWNLOAD LOCATIONS",
+            ["game_location"] = "GAME DOWNLOAD LOCATION",
+            ["launcher_location"] = "LAUNCHER DOWNLOAD LOCATION",
+            ["browse"] = "Browse",
+            ["ask_download_location"] = "Ask every time where to download",
             ["apply"] = "Apply",
             ["cancel"] = "Cancel",
             ["ok"] = "OK",
             ["hint"] = "<Game_Branch>  <OS|CN|PC>  <version>  [-b]",
             ["downloading"] = "Downloading\u2026",
-            ["about_ver"] = "Version 0.7.2.0629.20260714.0949 Beta",
+            ["about_ver"] = LauncherIdentity.AboutVersionEnglish,
             ["about_desc"] = "Strinova game client downloader and version manager.",
             ["about_credit"] = "by Cecilia \u00b7 zrobione dla Tosia \u2665",
             ["about_license"] = "Licensed under PolyForm Noncommercial 1.0",
@@ -278,7 +283,7 @@ namespace StrinowaWPF
         //cn
         static readonly Dictionary<string, string> _cn = new()
         {
-            ["title"] = "Strinowa v0.72",
+            ["title"] = "Strinowa v0.77.90",
             ["settings"] = "\u8bbe\u7f6e",
             ["about"] = "\u5173\u4e8e",
             ["launcher_theme"] = "\u542f\u52a8\u5668\u4e3b\u9898",
@@ -306,12 +311,17 @@ namespace StrinowaWPF
             ["options"] = "\u9009\u9879",
             ["clear_log"] = "\u4e0b\u8f7d\u5b8c\u6210\u540e\u6e05\u9664\u65e5\u5fd7",
             ["save_bruteforce"] = "\u5c06\u66b4\u529b\u7834\u89e3\u7ed3\u679c\u4fdd\u5b58\u5230\u6587\u4ef6",
+            ["download_locations"] = "\u4e0b\u8f7d\u4f4d\u7f6e",
+            ["game_location"] = "\u6e38\u620f\u4e0b\u8f7d\u4f4d\u7f6e",
+            ["launcher_location"] = "\u542f\u52a8\u5668\u4e0b\u8f7d\u4f4d\u7f6e",
+            ["browse"] = "\u6d4f\u89c8",
+            ["ask_download_location"] = "\u6bcf\u6b21\u8be2\u95ee\u4e0b\u8f7d\u4f4d\u7f6e",
             ["apply"] = "\u5e94\u7528",
             ["cancel"] = "\u53d6\u6d88",
             ["ok"] = "\u786e\u5b9a",
             ["hint"] = "<\u6e38\u620f\u5206\u652f>  <OS|CN|PC>  <\u7248\u672c>  [-b]",
             ["downloading"] = "\u6b63\u5728\u4e0b\u8f7d\u2026",
-            ["about_ver"] = "\u7248\u672c 0.7.2.0629.20260714.0949 Beta",
+            ["about_ver"] = LauncherIdentity.AboutVersionChinese,
             ["about_desc"] = "\u5361\u62c9\u5f7c\u4e18\u6e38\u620f\u5ba2\u6237\u7aef\u4e0b\u8f7d\u5668\u548c\u7248\u672c\u7ba1\u7406\u5668\u3002",
             ["about_credit"] = "by Cecilia \u00b7 \u4e3a Tosia \u5236\u4f5c \u2665",
             ["about_license"] = "\u6388\u6743\u5e94\u7528 PolyForm \u975e\u5546\u4e1a 1.0 \u8bb8\u53ef",
@@ -341,7 +351,7 @@ namespace StrinowaWPF
         //pl
         static readonly Dictionary<string, string> _pl = new()
         {
-            ["title"] = "Strinowa v0.72",
+            ["title"] = "Strinowa v0.77.90",
             ["settings"] = "Ustawienia",
             ["about"] = "O programie",
             ["launcher_theme"] = "MOTYW LAUNCHERA",
@@ -369,12 +379,17 @@ namespace StrinowaWPF
             ["options"] = "OPCJE",
             ["clear_log"] = "Wyczy\u015b\u0107 log po zako\u0144czeniu pobierania",
             ["save_bruteforce"] = "Zapisz wyniki bruteforce do pliku",
+            ["download_locations"] = "LOKALIZACJE POBIERANIA",
+            ["game_location"] = "LOKALIZACJA POBIERANIA GRY",
+            ["launcher_location"] = "LOKALIZACJA POBIERANIA LAUNCHERA",
+            ["browse"] = "Przegl\u0105daj",
+            ["ask_download_location"] = "Pytaj za ka\u017cdym razem, gdzie pobra\u0107",
             ["apply"] = "Zastosuj",
             ["cancel"] = "Anuluj",
             ["ok"] = "OK",
             ["hint"] = "<Ga\u0142\u0105\u017a_Gry>  <OS|CN|PC>  <wersja>  [-b]",
             ["downloading"] = "Pobieranie\u2026",
-            ["about_ver"] = "Wersja 0.7.2.0629.20260714.0949 Beta",
+            ["about_ver"] = LauncherIdentity.AboutVersionPolish,
             ["about_desc"] = "Pobieracz klienta gry Kalabijau i mened\u017cer wersji.",
             ["about_credit"] = "by Cecilia \u00b7 zrobione dla Tosia \u2665",
             ["about_license"] = "Licencja PolyForm Niekomercyjna 1.0",
@@ -412,6 +427,9 @@ namespace StrinowaWPF
         public static bool LauncherDefault7z { get; set; } = true;
         public static bool LauncherDefaultExe { get; set; } = false;
         public static bool ShowDevkits { get; set; } = false;
+        public static string GameDownloadLocation { get; set; } = "Game";
+        public static string LauncherDownloadLocation { get; set; } = "Launcher";
+        public static bool AskDownloadLocation { get; set; } = false;
     }
 
     public static class AppTheme
@@ -577,6 +595,7 @@ namespace StrinowaWPF
         {
             _host = host;
             InitializeComponent();
+            ApplyUiScale(host?.CurrentUiScale ?? 100);
             Loaded += (_, _) =>
             {
                 SyncWindowSettings();
@@ -595,7 +614,11 @@ namespace StrinowaWPF
             _pendingLang = Strings.Lang;
             ClearLogCheck.IsChecked = AppSettings.ClearLogOnFinish;
             SaveBruteforceCheck.IsChecked = AppSettings.SaveBruteforceToFile;
-            SpeedBox.Text = AppSettings.SpeedLimitKBs.ToString();            if (_host is MainWindow mwInit)
+            GameLocationBox.Text = string.IsNullOrWhiteSpace(AppSettings.GameDownloadLocation) ? "Game" : AppSettings.GameDownloadLocation;
+            LauncherLocationBox.Text = string.IsNullOrWhiteSpace(AppSettings.LauncherDownloadLocation) ? "Launcher" : AppSettings.LauncherDownloadLocation;
+            AskLocationCheck.IsChecked = AppSettings.AskDownloadLocation;
+            SpeedBox.Text = AppSettings.SpeedLimitKBs.ToString();
+            if (_host is MainWindow mwInit)
             {
                 UiScaleSlider.Value = mwInit.CurrentUiScale;
                 UiScaleValue.Text = $"{mwInit.CurrentUiScale}%";
@@ -608,6 +631,11 @@ namespace StrinowaWPF
             UpdatePreview();
             StartWavePreview();
             ApplyLangToUI();
+        }
+
+        public void ApplyUiScale(int percent)
+        {
+            WindowScale.Apply(this, RootBorder, percent, 460, 640);
         }
 
         void StartWavePreview()
@@ -718,6 +746,7 @@ namespace StrinowaWPF
                 _originalUiScale = owner.CurrentUiScale;
                 UiScaleSlider.Value = owner.CurrentUiScale;
                 UiScaleValue.Text = $"{owner.CurrentUiScale}%";
+                ApplyUiScale(owner.CurrentUiScale);
                 _scalePreviewReady = true;
             }
         }
@@ -768,10 +797,25 @@ namespace StrinowaWPF
             AT(SectionPreview, accent.Color);
             AT(SectionLang, accent.Color);
             AT(SectionOptions, accent.Color);
+            AT(SectionLocations, accent.Color);
+            AT(GameLocationLabel, subFg.Color);
+            AT(LauncherLocationLabel, subFg.Color);
 
             AT(TerminalColorNote, (isAcrylic ? subFg : isLight ? B(0x55, 0x55, 0x77) : B(0x66, 0x66, 0x88)).Color);
             AT(ClearLogCheck, textFg.Color);
             AT(SaveBruteforceCheck, textFg.Color);
+            AT(AskLocationCheck, textFg.Color);
+            foreach (var box in new[] { GameLocationBox, LauncherLocationBox })
+            {
+                box.Foreground = textFg;
+                box.CaretBrush = accent;
+            }
+            foreach (var button in new[] { BrowseGameLocationBtn, BrowseLauncherLocationBtn })
+            {
+                button.Background = tileBg;
+                button.Foreground = textFg;
+                button.BorderBrush = border;
+            }
             ApplyBtn.Background = isAcrylic ? B(0xD8, 0xD9, 0x3F, 0x82) : B(0xDC, 0x32, 0x78);
             CancelBtn.Background = isAcrylic ? B(0x40, 0x42, 0x42, 0x42) : tileBg;
             CancelBtn.Foreground = textFg;
@@ -855,6 +899,12 @@ namespace StrinowaWPF
             SectionOptions.Text = Strings.Get("options");
             ClearLogCheck.Content = Strings.Get("clear_log");
             SaveBruteforceCheck.Content = Strings.Get("save_bruteforce");
+            SectionLocations.Text = Strings.Get("download_locations");
+            GameLocationLabel.Text = Strings.Get("game_location");
+            LauncherLocationLabel.Text = Strings.Get("launcher_location");
+            BrowseGameLocationBtn.Content = Strings.Get("browse");
+            BrowseLauncherLocationBtn.Content = Strings.Get("browse");
+            AskLocationCheck.Content = Strings.Get("ask_download_location");
             ApplyBtn.Content = Strings.Get("apply");
             CancelBtn.Content = Strings.Get("cancel");
 
@@ -994,6 +1044,9 @@ namespace StrinowaWPF
             Strings.Lang = _pendingLang;
             AppSettings.ClearLogOnFinish = ClearLogCheck.IsChecked == true;
             AppSettings.SaveBruteforceToFile = SaveBruteforceCheck.IsChecked == true;
+            AppSettings.GameDownloadLocation = NormalizeLocation(GameLocationBox.Text, "Game");
+            AppSettings.LauncherDownloadLocation = NormalizeLocation(LauncherLocationBox.Text, "Launcher");
+            AppSettings.AskDownloadLocation = AskLocationCheck.IsChecked == true;
             if (int.TryParse(SpeedBox.Text.Trim(), out int spd) && spd >= 64)
                 AppSettings.SpeedLimitKBs = spd;
             if (_host is MainWindow mwSize)
@@ -1013,6 +1066,30 @@ namespace StrinowaWPF
             Close();
         }
 
+        static string NormalizeLocation(string? value, string fallback)
+        {
+            var normalized = (value ?? string.Empty).Trim().Trim('"');
+            return string.IsNullOrWhiteSpace(normalized) ? fallback : normalized;
+        }
+
+        void BrowseGameLocation_Click(object sender, RoutedEventArgs e) => BrowseFolder(GameLocationBox);
+        void BrowseLauncherLocation_Click(object sender, RoutedEventArgs e) => BrowseFolder(LauncherLocationBox);
+
+        static void BrowseFolder(TextBox target)
+        {
+            var initial = target.Text.Trim().Trim('"');
+            if (!Directory.Exists(initial))
+                initial = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select download folder",
+                InitialDirectory = initial,
+                Multiselect = false,
+            };
+            if (dialog.ShowDialog() == true)
+                target.Text = dialog.FolderName;
+        }
+
         void UiScaleSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (UiScaleValue == null) return;
@@ -1028,6 +1105,7 @@ namespace StrinowaWPF
             { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } };
             UiScaleSlider.BeginAnimation(OpacityProperty, sliderPulse);
 
+            ApplyUiScale((int)e.NewValue);
             if (_scalePreviewReady) _host?.ApplyUiScale((int)e.NewValue);
         }
         void CloseBtn_Click(object s, RoutedEventArgs e)

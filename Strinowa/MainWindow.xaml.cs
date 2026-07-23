@@ -113,6 +113,9 @@ namespace StrinowaWPF
         public bool WinBuildScan { get; set; } = true;
         public bool DispatchWinBuild { get; set; } = true;
         public bool ShowDevkits { get; set; } = false;
+        public string GameLocation { get; set; } = "Game";
+        public string LauncherLocation { get; set; } = "Launcher";
+        public bool AskDownloadLocation { get; set; } = false;
 
         static string Path => AppPaths.ConfigPath;
 
@@ -146,8 +149,15 @@ namespace StrinowaWPF
                     cfg.ShowDevkits = sd;
                     removeHiddenDevkitKey = !sd;
                 }
+                if (key == "gamelocation" && !string.IsNullOrWhiteSpace(val)) cfg.GameLocation = val.Trim().Trim('"');
+                if (key == "launcherlocation" && !string.IsNullOrWhiteSpace(val)) cfg.LauncherLocation = val.Trim().Trim('"');
+                if (key == "askdownloadlocation" && bool.TryParse(val, out bool ask)) cfg.AskDownloadLocation = ask;
             }
             if (removeHiddenDevkitKey) cfg.Save();
+            // Reject stale values written by older scaled-window builds. A bad
+            // persisted size should never make the launcher open as a tiny strip.
+            cfg.Width = Math.Clamp(cfg.Width, 760, 1920);
+            cfg.Height = Math.Clamp(cfg.Height, 380, 1200);
             return cfg;
         }
 
@@ -160,6 +170,8 @@ namespace StrinowaWPF
                 $"clearlog={ClearLog}\nsavebrf={SaveBrf}\n" +
                 $"speedkbs={SpeedKBs}\nuiscale={UiScale}\n" +
                 $"fmt7z={Fmt7z}\nfmtexe={FmtExe}\n" +
+                $"gamelocation={GameLocation}\nlauncherlocation={LauncherLocation}\n" +
+                $"askdownloadlocation={AskDownloadLocation}\n" +
                 $"WinBuildScan={WinBuildScan}\nDispatchWinBuild={DispatchWinBuild}\n" +
                 (ShowDevkits ? "ShowDevkits=True\n" : ""));
         }
@@ -172,8 +184,8 @@ namespace StrinowaWPF
         static readonly bool debug = false;
 
         const string OS_ROOT = "https://resource-download.strinova.com/Client/Win/GameDepot";
-        const string CN_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.myqcloud.com/Client/Win/GameDepot";
-        const string CN_ALL_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.myqcloud.com/Client/Win/GameDepot";
+        const string CN_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.tencentcos.cn/Client/Win/GameDepot";
+        const string CN_ALL_ROOT = "https://klbq-cdn-1300343128.cos.ap-shanghai.tencentcos.cn/Client/Win/GameDepot";
 
         const string PC_ROOT = "https://klbqcp-client-cdn.gxpan.cn/Client/Win/GameDepot";
         const string QQ_ROOT = "https://down.klbq.qq.com/Client/Win/GameDepot";
@@ -205,7 +217,7 @@ namespace StrinowaWPF
 
         Config _cfg = new();
         bool _busy = false;
-        bool _versionClickBusy;
+        int _downloadSelectionGeneration;
         string _currentHint = "<channel>  <OS|CN|PC>  <version>  [-b]";
         readonly List<string> _history = new();
         int _histIdx = -1;
@@ -272,7 +284,7 @@ namespace StrinowaWPF
                 StopDebugOverlay();
                 _downloadConfirmSource?.TrySetResult(false);
             };
-            Http.DefaultRequestHeaders.UserAgent.ParseAdd("Strinowa-WPF-Downloader/1.11");
+            Http.DefaultRequestHeaders.UserAgent.ParseAdd(LauncherIdentity.UserAgent);
             TC.Devkit = _devkitAnim.Brush;
             if (debug) SetDebugOverlayVisible(true);
         }
@@ -304,6 +316,9 @@ namespace StrinowaWPF
             AppSettings.LauncherDefault7z = _cfg.Fmt7z;
             AppSettings.LauncherDefaultExe = _cfg.FmtExe;
             AppSettings.ShowDevkits = _cfg.ShowDevkits;
+            AppSettings.GameDownloadLocation = string.IsNullOrWhiteSpace(_cfg.GameLocation) ? "Game" : _cfg.GameLocation;
+            AppSettings.LauncherDownloadLocation = string.IsNullOrWhiteSpace(_cfg.LauncherLocation) ? "Launcher" : _cfg.LauncherLocation;
+            AppSettings.AskDownloadLocation = _cfg.AskDownloadLocation;
 
             ApplyTheme();
             InputHint.Text = Strings.Get("hint");
@@ -331,6 +346,26 @@ namespace StrinowaWPF
             OuterBorder.LayoutTransform = new ScaleTransform(_uiScale, _uiScale);
             ApplyCurrentWindowDimensions();
             UpdateWindowClip();
+            foreach (Window window in Application.Current.Windows)
+            {
+                switch (window)
+                {
+                    case SettingsWindow settings:
+                        settings.ApplyUiScale(CurrentUiScale);
+                        break;
+                    case About about:
+                        about.ApplyUiScale(CurrentUiScale);
+                        break;
+                    case Manifest manifest:
+                        manifest.ApplyUiScale(CurrentUiScale);
+                        break;
+                    // Bookmarks are intentionally disabled. Keep the old scaling hook
+                    // commented so the feature can be restored without reworking scale support.
+                    // case Bookmarks bookmarks:
+                    //     bookmarks.ApplyUiScale(CurrentUiScale);
+                    //     break;
+                }
+            }
         }
 
         public void ApplyWindowPreset(int width, int height)
@@ -538,9 +573,14 @@ namespace StrinowaWPF
             _devkitAnim.Stop();
             _devkitAnim = new DevkitColorAnimator(AppTheme.CurrentTermPreset);
             TC.Devkit = _devkitAnim.Brush;
+            foreach (var wave in _terminalDevkitWaves)
+                wave.SetPreset(AppTheme.CurrentTermPreset);
 
             RecolorTerminal();
             _manifestScanner?.ApplyTheme();
+            // Bookmark feature disabled for now.
+            // foreach (Window window in Application.Current.Windows)
+            //     if (window is Bookmarks bookmarks) bookmarks.ApplyTheme();
             UpdateAdvancedBruteUi();
             if (IsLoaded) ApplyCurrentWindowDimensions();
             UpdateWindowClip();
@@ -576,10 +616,6 @@ namespace StrinowaWPF
         }
         void RecolorTerminal()
         {
-            var brushMap = new Dictionary<SolidColorBrush, SolidColorBrush>
-            {
-            };
-
             foreach (var block in TerminalBox.Document.Blocks.ToList())
             {
                 if (block is BlockUIContainer buc && buc.Child is TextBlock tb)
@@ -587,7 +623,7 @@ namespace StrinowaWPF
                     foreach (var inline in tb.Inlines.ToList())
                     {
                         if (inline is Run r && r.Foreground is SolidColorBrush rb)
-                            r.Foreground = RemapBrush(rb);
+                            r.Foreground = r.Tag is string role ? BrushForRole(role) : RemapBrush(rb);
                     }
                 }
             }
@@ -670,7 +706,10 @@ namespace StrinowaWPF
             bool any = false;
             foreach (var sp in spans)
             {
-                var run = new System.Windows.Documents.Run(sp.Text);
+                var run = new System.Windows.Documents.Run(sp.Text)
+                {
+                    Tag = BrushRole(sp.Color),
+                };
                 // devkit brush
                 run.Foreground = ReferenceEquals(sp.Color, TC.Devkit) ? TC.Devkit : sp.Color;
                 if (sp.Bold) run.FontWeight = FontWeights.Bold;
@@ -711,7 +750,11 @@ namespace StrinowaWPF
             bool any = false;
             foreach (var sp in spans)
             {
-                var run = new System.Windows.Documents.Run(sp.Text) { Foreground = sp.Color };
+                var run = new System.Windows.Documents.Run(sp.Text)
+                {
+                    Foreground = sp.Color,
+                    Tag = BrushRole(sp.Color),
+                };
                 if (sp.Bold) run.FontWeight = FontWeights.Bold;
                 tb.Inlines.Add(run);
                 any = true;
@@ -747,18 +790,16 @@ namespace StrinowaWPF
                 if (parts.Length >= 3 && parts[0].Equals("dl", StringComparison.OrdinalIgnoreCase) &&
                     _lastScanCtx != null)
                 {
-                    if (_versionClickBusy) return;
-                    _versionClickBusy = true;
+                    var selectionGeneration = BeginDownloadSelection();
                     try
                     {
-                        await HandleClickDownload(_lastScanCtx, parts[1], parts[2]);
+                        await HandleClickDownload(_lastScanCtx, parts[1], parts[2], selectionGeneration);
                     }
                     catch (Exception ex)
                     {
                         AppendText($"  Could not open download: {ex.Message}", TC.Warn);
                         ShowModernError(ex, "Could not open download");
                     }
-                    finally { _versionClickBusy = false; }
                     return;
                 }
 
@@ -813,6 +854,23 @@ namespace StrinowaWPF
             TerminalBox.Document.Blocks.Add(new BlockUIContainer(tb) { Margin = new Thickness(0) });
             ScrollToBottom();
         }
+
+        static SolidColorBrush BrushForRole(string role) => role.ToLowerInvariant() switch
+        {
+            "normal" => TC.Normal,
+            "cn" => TC.CN,
+            "release" => TC.Release,
+            "deprecated" => TC.Deprecated,
+            "devkit" => TC.Devkit,
+            _ => TC.Normal,
+        };
+
+        static string? BrushRole(SolidColorBrush brush) =>
+            ReferenceEquals(brush, TC.Normal) ? "normal" :
+            ReferenceEquals(brush, TC.CN) ? "cn" :
+            ReferenceEquals(brush, TC.Release) ? "release" :
+            ReferenceEquals(brush, TC.Deprecated) ? "deprecated" :
+            ReferenceEquals(brush, TC.Devkit) ? "devkit" : null;
 
         void ShowClipboardToast(string text = "Copied link to clipboard")
         {
@@ -869,39 +927,86 @@ namespace StrinowaWPF
                 ? $"{root}/{branch}/{version}/full_{version}.7z"
                 : $"{root}/{branch}/{version}/full_zip/manifest.txt";
 
-        async Task HandleClickDownload(ScanContext ctx, string version, string source)
+        int BeginDownloadSelection()
         {
-            var src = source.ToLower();
+            unchecked { _downloadSelectionGeneration++; }
+            var pending = _downloadConfirmSource;
+            _downloadConfirmSource = null;
+            pending?.TrySetResult(false);
+            return _downloadSelectionGeneration;
+        }
+
+        bool IsCurrentDownloadSelection(int generation) => generation == _downloadSelectionGeneration;
+
+        async Task HandleClickDownload(ScanContext ctx, string version, string source, int? selectionGeneration = null)
+        {
+            var generation = selectionGeneration ?? BeginDownloadSelection();
+            if (!IsCurrentDownloadSelection(generation)) return;
+            var src = source.Trim().ToLowerInvariant();
             if (ctx.MultiChoices?.TryGetValue(MultiChoiceKey(version, source), out var multiChoices) == true &&
                 multiChoices.Count > 1)
             {
-                var selected = await ConfirmMultiDownloadInPanelAsync(version, multiChoices);
+                var selected = await ConfirmMultiDownloadInPanelAsync(version, multiChoices, generation);
                 foreach (var choice in selected)
                     await CeciliaDownloadAsync(RootForSource(choice.Source), choice.ResolvedBranch,
-                        choice.Version, null, true);
+                        choice.Version, null, true, generation);
                 return;
             }
-            if (!ctx.Maps.TryGetValue(src.ToUpper(), out var entry))
+            var sourceCode = src.ToUpperInvariant();
+            if (!ctx.Maps.TryGetValue(sourceCode, out var entry) ||
+                string.IsNullOrWhiteSpace(entry.root) ||
+                entry.vers?.Contains(version, StringComparer.OrdinalIgnoreCase) != true ||
+                entry.exists != null && entry.exists.TryGetValue(version, out var requestedExists) && !requestedExists)
             {
-                // try case-insensitive lookup
+                // A normal scan keeps CN and PC separate. Older scans merged them,
+                // however, so fall back to the sibling source when a hidden build
+                // was indexed there.
+                entry = default;
                 foreach (var kv in ctx.Maps)
                 {
-                    if (kv.Key.ToLower() == src) { entry = kv.Value; break; }
+                    if (kv.Key.Equals(sourceCode, StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(kv.Value.root) &&
+                        kv.Value.vers?.Contains(version, StringComparer.OrdinalIgnoreCase) == true &&
+                        (kv.Value.exists == null || !kv.Value.exists.TryGetValue(version, out var available) || available))
+                    {
+                        entry = kv.Value;
+                        break;
+                    }
+                }
+                if (string.IsNullOrWhiteSpace(entry.root))
+                {
+                    foreach (var fallback in sourceCode switch
+                    {
+                        "CN" => new[] { "PC", "CN" },
+                        "PC" => new[] { "CN", "PC" },
+                        _ => Array.Empty<string>(),
+                    })
+                    {
+                        if (ctx.Maps.TryGetValue(fallback, out var candidate) &&
+                            !string.IsNullOrWhiteSpace(candidate.root) &&
+                            candidate.vers?.Contains(version, StringComparer.OrdinalIgnoreCase) == true &&
+                            (candidate.exists == null || !candidate.exists.TryGetValue(version, out var available) || available))
+                        {
+                            entry = candidate;
+                            break;
+                        }
+                    }
                 }
             }
             if (string.IsNullOrEmpty(entry.root))
             {
-                AppendText($"  source '{src.ToUpper()}' not found in scan â€” re-run the scan.", TC.Warn);
+                AppendText($"  source '{sourceCode}' not found in scan — re-run the scan.", TC.Warn);
                 return;
             }
-            if (!entry.vers.Contains(version))
+            if (entry.vers?.Contains(version, StringComparer.OrdinalIgnoreCase) != true ||
+                entry.exists != null && entry.exists.TryGetValue(version, out var finalExists) && !finalExists)
             {
                 AppendText("  Version not found in this source.", TC.Warn);
                 return;
             }
 
-            var pickedBranch = entry.choice.GetValueOrDefault(version, ctx.Branch);
-            await CeciliaDownloadAsync(entry.root, pickedBranch, version, null);
+            var pickedBranch = entry.choice?.GetValueOrDefault(version, ctx.Branch) ?? ctx.Branch;
+            await CeciliaDownloadAsync(entry.root, pickedBranch, version, null, false, generation);
         }
 
         BlockUIContainer? _loaderBlock = null;
@@ -1129,7 +1234,7 @@ namespace StrinowaWPF
 
         void UpdateLoaderProgress(int step, int total, string text)
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() =>
             {
                 if (_loaderBlock?.Child is StackPanel row)
                 {
@@ -1317,7 +1422,7 @@ namespace StrinowaWPF
                 if (dlLo is "branch" or "branches") { ShowBranches(); continue; }
                 if (dlLo is "exit" or "back" or "q") { ShowHeader(); break; }
 
-                if (Regex.IsMatch(dlChoice, @"^\d+(?:\.\d+){1,}$"))
+                if (IsValidVersion(dlChoice))
                 {
                     var version = dlChoice;
                     var priority = ctx.AllowedSource != null
@@ -1629,6 +1734,15 @@ namespace StrinowaWPF
             ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
             : $"{value.Minutes:00}:{value.Seconds:00}";
 
+        static TimeSpan EstimateEta(int completed, int total, Stopwatch started)
+        {
+            if (completed <= 0 || total <= completed) return TimeSpan.Zero;
+            var rate = completed / Math.Max(0.1, started.Elapsed.TotalSeconds);
+            return rate <= 0
+                ? TimeSpan.Zero
+                : TimeSpan.FromSeconds((total - completed) / rate);
+        }
+
         async Task<(List<string> vers, Dictionary<string, HashSet<string>> revmap)> GetVersionsQuietAsync(string url)
         {
             try
@@ -1789,20 +1903,43 @@ namespace StrinowaWPF
                 }
             }
 
-            int totalSteps = tasks.Count;
+            var activeManifestTasks = tasks
+                .Where(pair => allowedSource == null || pair.Key.Equals(allowedSource, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Value)
+                .ToList();
+            int totalSteps = Math.Max(1, activeManifestTasks.Count);
             int step = 0;
+            var locatingStarted = Stopwatch.StartNew();
 
-            ShowLoader(Strings.Get("locating"));
-            foreach (var key in tasks.Keys.ToList())
+            ShowLoader($"{Strings.Get("locating")} [0/{totalSteps}]  ETA --:--");
+            var pendingManifestTasks = new HashSet<Task<(List<string> vers, Dictionary<string, HashSet<string>> revmap)>>(activeManifestTasks);
+            while (pendingManifestTasks.Count > 0)
             {
+                var finished = await Task.WhenAny(pendingManifestTasks);
+                pendingManifestTasks.Remove(finished);
                 step++;
-                UpdateLoaderProgress(step, totalSteps, $"{Strings.Get("locating")} [{step}/{totalSteps}]");
-                await tasks[key];
+                UpdateLoaderProgress(step, totalSteps,
+                    $"{Strings.Get("locating")} [{step}/{totalSteps}]  ETA {FormatEta(EstimateEta(step, totalSteps, locatingStarted))}");
             }
             HideLoader();
 
             var results = tasks.ToDictionary(kv => kv.Key, kv => kv.Value.Result);
-            if (publicManifestTasks.Count > 0) await Task.WhenAll(publicManifestTasks.Values);
+            if (publicManifestTasks.Count > 0)
+            {
+                var publicStarted = Stopwatch.StartNew();
+                int publicDone = 0;
+                ShowLoader($"{Strings.Get("fetching_manifest")} [0/{publicManifestTasks.Count}]  ETA --:--");
+                var pendingPublicTasks = new HashSet<Task<(List<string> vers, Dictionary<string, HashSet<string>> revmap)>>(publicManifestTasks.Values);
+                while (pendingPublicTasks.Count > 0)
+                {
+                    var finished = await Task.WhenAny(pendingPublicTasks);
+                    pendingPublicTasks.Remove(finished);
+                    publicDone++;
+                    UpdateLoaderProgress(publicDone, publicManifestTasks.Count,
+                        $"{Strings.Get("fetching_manifest")} [{publicDone}/{publicManifestTasks.Count}]  ETA {FormatEta(EstimateEta(publicDone, publicManifestTasks.Count, publicStarted))}");
+                }
+                HideLoader();
+            }
             var publicVersions = results.ToDictionary(
                 pair => pair.Key,
                 pair => new HashSet<string>(
@@ -1840,33 +1977,55 @@ namespace StrinowaWPF
             }
 
             var buildTasks = new Dictionary<string, Task<BuildResult>>();
-            string? prevCode = null;
-            BuildResult? prevResult = null;
+            var buildCodes = new[] { "OS", "CN", "PC", "QQ" };
+            var buildTotal = 0;
+            string? previousCode = null;
+            foreach (var code in buildCodes)
+            {
+                var (vers, _) = results[code];
+                if (vers.Count == 0) continue;
+                var reuse = previousCode != null && vers.SequenceEqual(results[previousCode].vers);
+                if (!reuse) buildTotal += vers.Count;
+                previousCode = code;
+            }
 
-            //foreach (var code in new[] { "OS", "CN", "PC", "QQ", PM })
-            foreach (var code in new[] { "OS", "CN", "PC", "QQ" }) // priority order so dont change.
+            var buildStarted = Stopwatch.StartNew();
+            var buildCompleted = 0;
+            long buildLastUpdate = 0;
+            void ReportBuildProgress()
+            {
+                var done = Interlocked.Increment(ref buildCompleted);
+                var elapsedMs = buildStarted.ElapsedMilliseconds;
+                if (done != buildTotal && elapsedMs - Interlocked.Read(ref buildLastUpdate) < 100) return;
+                Interlocked.Exchange(ref buildLastUpdate, elapsedMs);
+                UpdateLoaderProgress(done, buildTotal,
+                    $"{Strings.Get("identifying")} [{done}/{buildTotal}]  ETA {FormatEta(EstimateEta(done, buildTotal, buildStarted))}");
+            }
+
+            if (buildTotal > 0)
+                ShowLoader($"{Strings.Get("identifying")} [0/{buildTotal}]  ETA --:--");
+
+            Task<BuildResult>? previousTask = null;
+            previousCode = null;
+            foreach (var code in buildCodes)
             {
                 var (vers, revmap) = results[code];
                 if (vers.Count == 0) continue;
 
-                if (prevCode != null && prevResult != null
-                    && vers.SequenceEqual(results[prevCode!].vers))
+                if (previousTask != null && previousCode != null && vers.SequenceEqual(results[previousCode].vers))
                 {
-                    var capturedResult = prevResult;
-                    buildTasks[code] = Task.FromResult(capturedResult);
+                    buildTasks[code] = previousTask;
                 }
                 else
                 {
                     var capturedRoot = code switch { "OS" => OS_ROOT, "CN" => CN_ROOT, "PC" => PC_ROOT, _ => QQ_ROOT };
-                    var capturedRevmap = revmap;
-                    var capturedVers = vers;
-                    buildTasks[code] = BuildVersAsync(capturedRoot, branch, capturedVers, capturedRevmap);
+                    buildTasks[code] = BuildVersAsync(capturedRoot, branch, vers, revmap, ReportBuildProgress);
                 }
-                prevCode = code;
+                previousCode = code;
+                previousTask = buildTasks[code];
             }
             if (buildTasks.Count > 0)
             {
-                ShowLoader(Strings.Get("identifying"));
                 await Task.WhenAll(buildTasks.Values);
                 HideLoader();
             }
@@ -1893,6 +2052,10 @@ namespace StrinowaWPF
                 var chinaVersions = results["CN"].vers.Concat(results["PC"].vers)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 var chinaGate = new object();
+                var chinaStarted = Stopwatch.StartNew();
+                var chinaCompleted = 0;
+                long chinaLastUpdate = 0;
+                ShowLoader($"{Strings.Get("identifying")} [0/{chinaVersions.Count}]  ETA --:--");
                 await Parallel.ForEachAsync(chinaVersions,
                     new ParallelOptions { MaxDegreeOfParallelism = 32 },
                     async (version, _) =>
@@ -1917,7 +2080,16 @@ namespace StrinowaWPF
                         var status = new ChinaBuildStatus(cnExists || pcExists,
                             dates.Count == 0 ? null : dates.Min());
                         lock (chinaGate) chinaBuilds[version] = status;
+                        var done = Interlocked.Increment(ref chinaCompleted);
+                        var elapsedMs = chinaStarted.ElapsedMilliseconds;
+                        if (done == chinaVersions.Count || elapsedMs - Interlocked.Read(ref chinaLastUpdate) >= 100)
+                        {
+                            Interlocked.Exchange(ref chinaLastUpdate, elapsedMs);
+                            UpdateLoaderProgress(done, chinaVersions.Count,
+                                $"{Strings.Get("identifying")} [{done}/{chinaVersions.Count}]  ETA {FormatEta(EstimateEta(done, chinaVersions.Count, chinaStarted))}");
+                        }
                     });
+                HideLoader();
 
                 foreach (var code in new[] { "CN", "PC" })
                 {
@@ -2039,7 +2211,9 @@ namespace StrinowaWPF
                 }
             }
 
-            maps = MergeSources(maps);
+            // Keep CN and PC maps separate. The display uses the selected source and
+            // download clicks must be able to resolve that same source, especially
+            // for hidden builds that exist only on one branch.
             var ctx = new ScanContext(branch, allowedSource, hiddenVersion, maps);
             _lastScanCtx = ctx;
             return ctx;
@@ -2161,7 +2335,7 @@ namespace StrinowaWPF
 
 
         async Task<BuildResult> BuildVersAsync(string baseRoot, string branch,
-            List<string> versions, Dictionary<string, HashSet<string>> revmap)
+            List<string> versions, Dictionary<string, HashSet<string>> revmap, Action? reportProgress = null)
         {
             var types = new Dictionary<string, string>();
             var dates = new Dictionary<string, DateTime?>();
@@ -2184,6 +2358,7 @@ namespace StrinowaWPF
                             exists[v] = ok;
                             choice[v] = branch;
                         }
+                        reportProgress?.Invoke();
                         return;
                     }
 
@@ -2231,17 +2406,29 @@ namespace StrinowaWPF
                         exists[v] = foundEx;
                         choice[v] = foundBranch ?? (cands.Count > 0 ? cands[0] : branch);
                     }
+                    reportProgress?.Invoke();
                 });
 
             return new BuildResult(types, dates, exists, choice);
         }
 
         async Task CeciliaDownloadAsync(string baseRoot, string branch, string version,
-            string? manifestTextOpt, bool skipConfirmation = false)
+            string? manifestTextOpt, bool skipConfirmation = false, int? selectionGeneration = null)
         {
+            if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
             var downloadRegion = baseRoot.Equals(OS_ROOT, StringComparison.OrdinalIgnoreCase) ? "OS" : "CN";
             var versionDirectory = $"{downloadRegion}_{branch}-{version}";
-            ShowDownloadPreparation($"Preparing {branch} {version}", "Checking download files…");
+            string? askedDownloadFolder = null;
+            if (AppSettings.AskDownloadLocation)
+            {
+                askedDownloadFolder = PickDownloadFolder(
+                    branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase)
+                        ? AppSettings.LauncherDownloadLocation
+                        : AppSettings.GameDownloadLocation,
+                    $"Select folder for {branch} {version}");
+                if (askedDownloadFolder == null) return;
+            }
+            ShowDownloadPreparation($"Preparing {branch} {version}", "Checking download files…", selectionGeneration ?? 0);
             if (branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase))
             {
                 var launcherName = branch["Launcher_".Length..];
@@ -2251,17 +2438,19 @@ namespace StrinowaWPF
                 var lUrlExe = $"{baseRoot}/{branch}/{version}/{exeFileName}";
                 var (has7z, _) = await ProbeUrlAsync(lUrl7z);
                 var (hasExe, _) = await ProbeUrlAsync(lUrlExe);
+                if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
 
                 if (!has7z && !hasExe)
                 {
-                    RestoreDownloadPanelAfterPreparation();
+                    RestoreDownloadPanelAfterPreparation(selectionGeneration ?? 0);
                     ShowClipboardToast("This version is inaccessible or has been deleted");
                     return;
                 }
 
-                ShowDownloadPreparation($"Preparing {branch} {version}", "Reading file sizes…");
+                ShowDownloadPreparation($"Preparing {branch} {version}", "Reading file sizes…", selectionGeneration ?? 0);
                 var lSz = has7z ? await HeadSizeAsync(lUrl7z) : null;
                 var eSz = hasExe ? await HeadSizeAsync(lUrlExe) : null;
+                if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
                 bool dl7z;
                 bool dlExe;
                 if (skipConfirmation)
@@ -2276,8 +2465,10 @@ namespace StrinowaWPF
                 }
                 else
                 {
-                    var selection = await ConfirmLauncherDownloadInPanelAsync(
-                        $"Download {branch} {version}", has7z, lSz, hasExe, eSz);
+                var selection = await ConfirmLauncherDownloadInPanelAsync(
+                    $"Download {branch} {version}", has7z, lSz, hasExe, eSz,
+                    selectionGeneration ?? 0);
+                if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
                     if (!selection.Confirmed) return;
                     dl7z = selection.Download7z;
                     dlExe = selection.DownloadExe;
@@ -2286,13 +2477,17 @@ namespace StrinowaWPF
                 var launcherDownloads = new List<(string key, string label, string url, string dest, long size, string description)>();
                 if (dl7z && has7z)
                 {
-                    var dest = Path.Combine("Launcher", versionDirectory, $"full_{version}.7z");
+                    var dest = askedDownloadFolder != null
+                        ? Path.Combine(askedDownloadFolder, $"full_{version}.7z")
+                        : Path.Combine(AppSettings.LauncherDownloadLocation, versionDirectory, $"full_{version}.7z");
                     launcherDownloads.Add(($"launcher|{lUrl7z}", $"Downloading {version}.7z",
                         lUrl7z, dest, lSz ?? 0, $"7z {FormatSize(lSz)}"));
                 }
                 if (dlExe && hasExe)
                 {
-                    var dest = Path.Combine("Launcher", versionDirectory, exeFileName);
+                    var dest = askedDownloadFolder != null
+                        ? Path.Combine(askedDownloadFolder, exeFileName)
+                        : Path.Combine(AppSettings.LauncherDownloadLocation, versionDirectory, exeFileName);
                     launcherDownloads.Add(($"launcher|{lUrlExe}", $"Downloading {exeFileName}",
                         lUrlExe, dest, eSz ?? 0, $"EXE {FormatSize(eSz)}"));
                 }
@@ -2311,23 +2506,25 @@ namespace StrinowaWPF
             if (manifestTextOpt == null)
             {
                 var vmUrl = $"{baseRoot}/{branch}/{version}/full_zip/manifest.txt";
-                ShowDownloadPreparation($"Preparing {branch} {version}", "Fetching version manifest…");
+                ShowDownloadPreparation($"Preparing {branch} {version}", "Fetching version manifest…", selectionGeneration ?? 0);
                 try
                 {
                     manifestText = await Http.GetStringAsync(vmUrl);
                 }
                 catch
                 {
-                    RestoreDownloadPanelAfterPreparation();
+                    RestoreDownloadPanelAfterPreparation(selectionGeneration ?? 0);
                     AppendText("  Version manifest not available.", TC.Warn); return;
                 }
             }
             else manifestText = manifestTextOpt;
 
+            if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
+
             var triples = ParseVersionManifest(manifestText);
             if (triples.Count == 0)
             {
-                RestoreDownloadPanelAfterPreparation();
+                RestoreDownloadPanelAfterPreparation(selectionGeneration ?? 0);
                 AppendText("  Manifest has no files.", TC.Warn);
                 return;
             }
@@ -2335,18 +2532,20 @@ namespace StrinowaWPF
             var items = triples.Select(t =>
             {
                 var url = $"{baseRoot}/{t.rel.TrimStart('/')}";
-                var dest = Path.Combine("Game", versionDirectory, Path.GetFileName(t.rel));
+                var dest = Path.Combine(
+                    askedDownloadFolder ?? Path.Combine(AppSettings.GameDownloadLocation, versionDirectory),
+                    Path.GetFileName(t.rel));
                 return new VersionItem(t.rel, t.branch, t.version, url, dest) { Size = null };
             }).ToList();
 
-            ShowDownloadPreparation($"Preparing {branch} {version}", "Fetching file sizes…");
+            ShowDownloadPreparation($"Preparing {branch} {version}", "Fetching file sizes…", selectionGeneration ?? 0);
             await Parallel.ForEachAsync(items,
                 new ParallelOptions { MaxDegreeOfParallelism = 32 },
                 async (it, _) => { it.Size = await HeadSizeAsync(it.Url); });
 
             long? grand = items.All(i => i.Size.HasValue) ? items.Sum(i => i.Size!.Value) : (long?)null;
 
-            var downloadDirectory = Path.Combine("Game", versionDirectory);
+            var downloadDirectory = askedDownloadFolder ?? Path.Combine(AppSettings.GameDownloadLocation, versionDirectory);
             Directory.CreateDirectory(downloadDirectory);
             var extractedArchives = LoadExtractedArchiveKeys(downloadDirectory);
 
@@ -2360,17 +2559,21 @@ namespace StrinowaWPF
             long alreadyDone = items.Where(ItemIsComplete).Where(it => it.Size.HasValue)
                                     .Sum(it => it.Size!.Value);
 
+            if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
+
             if (pending.Count == 0)
             {
-                RestoreDownloadPanelAfterPreparation();
+                RestoreDownloadPanelAfterPreparation(selectionGeneration ?? 0);
                 AppendText("  All files are already downloaded.", TC.Ok);
                 return;
             }
 
             var remaining = pending.All(i => i.Size.HasValue) ? pending.Sum(i => i.Size!.Value) : (long?)null;
             if (!skipConfirmation && !await ConfirmDownloadInPanelAsync(
-                $"Download {branch} {version}", $"{pending.Count:N0} files  •  {FormatSize(remaining)}"))
+                $"Download {branch} {version}", $"{pending.Count:N0} files  •  {FormatSize(remaining)}",
+                selectionGeneration ?? 0))
                 return;
+            if (selectionGeneration.HasValue && !IsCurrentDownloadSelection(selectionGeneration.Value)) return;
 
             var job = TryStartDownloadJob(
                 $"game|{baseRoot}|{branch}|{version}",
@@ -2389,9 +2592,26 @@ namespace StrinowaWPF
             _ = RunGameDownloadJobAsync(job, items, pending);
         }
 
-        void ShowDownloadPreparation(string label, string details)
+        static string? PickDownloadFolder(string preferred, string title)
         {
-            if (_downloadConfirmSource != null) return;
+            var initial = (preferred ?? string.Empty).Trim().Trim('"');
+            if (!Directory.Exists(initial))
+                initial = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = title,
+                InitialDirectory = initial,
+                Multiselect = false,
+            };
+            return dialog.ShowDialog() == true ? dialog.FolderName : null;
+        }
+
+        void ShowDownloadPreparation(string label, string details, int selectionGeneration = 0)
+        {
+            if (selectionGeneration != 0 && !IsCurrentDownloadSelection(selectionGeneration)) return;
+            var pending = _downloadConfirmSource;
+            _downloadConfirmSource = null;
+            pending?.TrySetResult(false);
             _downloadCompletionVisible = false;
             _completedDownloadFolder = null;
             DownloadCompletionActions.Visibility = Visibility.Collapsed;
@@ -2411,8 +2631,9 @@ namespace StrinowaWPF
             DlFooterGrid.Visibility = Visibility.Collapsed;
         }
 
-        void RestoreDownloadPanelAfterPreparation()
+        void RestoreDownloadPanelAfterPreparation(int selectionGeneration = 0)
         {
+            if (selectionGeneration != 0 && !IsCurrentDownloadSelection(selectionGeneration)) return;
             _downloadPreparationVisible = false;
             PauseBtn.Visibility = Visibility.Visible;
             DlTrack.Visibility = Visibility.Visible;
@@ -2421,11 +2642,13 @@ namespace StrinowaWPF
             else UpdateDlBar(null, EventArgs.Empty);
         }
 
-        async Task<bool> ConfirmDownloadInPanelAsync(string label, string details)
+        async Task<bool> ConfirmDownloadInPanelAsync(string label, string details, int selectionGeneration = 0)
         {
-            if (_downloadConfirmSource != null) return false;
+            if (selectionGeneration != 0 && !IsCurrentDownloadSelection(selectionGeneration)) return false;
+            _downloadConfirmSource?.TrySetResult(false);
             _downloadPreparationVisible = false;
-            _downloadConfirmSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _downloadConfirmSource = source;
 
             DownloadPanel.Visibility = Visibility.Visible;
             DlLabel.Text = label;
@@ -2445,29 +2668,35 @@ namespace StrinowaWPF
 
             try
             {
-                return await _downloadConfirmSource.Task;
+                return await source.Task;
             }
             finally
             {
-                _downloadConfirmSource = null;
-                DownloadConfirmBtn.Visibility = Visibility.Collapsed;
-                DownloadCancelBtn.Visibility = Visibility.Collapsed;
-                DownloadConfirmBtn.IsEnabled = true;
-                DownloadConfirmBtn.Opacity = 1.0;
-                PauseBtn.Visibility = Visibility.Visible;
-                DlTrack.Visibility = Visibility.Visible;
-                DlFooterGrid.Visibility = Visibility.Visible;
-                if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
-                else UpdateDlBar(null, EventArgs.Empty);
+                if (ReferenceEquals(_downloadConfirmSource, source))
+                {
+                    _downloadConfirmSource = null;
+                    DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+                    DownloadCancelBtn.Visibility = Visibility.Collapsed;
+                    DownloadConfirmBtn.IsEnabled = true;
+                    DownloadConfirmBtn.Opacity = 1.0;
+                    PauseBtn.Visibility = Visibility.Visible;
+                    DlTrack.Visibility = Visibility.Visible;
+                    DlFooterGrid.Visibility = Visibility.Visible;
+                    if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+                    else UpdateDlBar(null, EventArgs.Empty);
+                }
             }
         }
 
         async Task<(bool Confirmed, bool Download7z, bool DownloadExe)> ConfirmLauncherDownloadInPanelAsync(
-            string label, bool has7z, long? size7z, bool hasExe, long? sizeExe)
+            string label, bool has7z, long? size7z, bool hasExe, long? sizeExe, int selectionGeneration = 0)
         {
-            if (_downloadConfirmSource != null) return (false, false, false);
+            if (selectionGeneration != 0 && !IsCurrentDownloadSelection(selectionGeneration))
+                return (false, false, false);
+            _downloadConfirmSource?.TrySetResult(false);
             _downloadPreparationVisible = false;
-            _downloadConfirmSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _downloadConfirmSource = source;
             _launcherFormatConfirmation = true;
 
             DownloadPanel.Visibility = Visibility.Visible;
@@ -2499,26 +2728,29 @@ namespace StrinowaWPF
 
             try
             {
-                bool confirmed = await _downloadConfirmSource.Task;
+                bool confirmed = await source.Task;
                 return (confirmed,
                     confirmed && has7z && Launcher7zToggle.IsChecked == true,
                     confirmed && hasExe && LauncherExeToggle.IsChecked == true);
             }
             finally
             {
-                _launcherFormatConfirmation = false;
-                _downloadConfirmSource = null;
-                LauncherFormatPanel.Visibility = Visibility.Collapsed;
-                DownloadConfirmBtn.Visibility = Visibility.Collapsed;
-                LauncherDownloadConfirmBtn.Visibility = Visibility.Collapsed;
-                LauncherDownloadCancelBtn.Visibility = Visibility.Collapsed;
-                LauncherDownloadConfirmBtn.IsEnabled = true;
-                LauncherDownloadConfirmBtn.Opacity = 1.0;
-                PauseBtn.Visibility = Visibility.Visible;
-                DlTrack.Visibility = Visibility.Visible;
-                DlFooterGrid.Visibility = Visibility.Visible;
-                if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
-                else UpdateDlBar(null, EventArgs.Empty);
+                if (ReferenceEquals(_downloadConfirmSource, source))
+                {
+                    _launcherFormatConfirmation = false;
+                    _downloadConfirmSource = null;
+                    LauncherFormatPanel.Visibility = Visibility.Collapsed;
+                    DownloadConfirmBtn.Visibility = Visibility.Collapsed;
+                    LauncherDownloadConfirmBtn.Visibility = Visibility.Collapsed;
+                    LauncherDownloadCancelBtn.Visibility = Visibility.Collapsed;
+                    LauncherDownloadConfirmBtn.IsEnabled = true;
+                    LauncherDownloadConfirmBtn.Opacity = 1.0;
+                    PauseBtn.Visibility = Visibility.Visible;
+                    DlTrack.Visibility = Visibility.Visible;
+                    DlFooterGrid.Visibility = Visibility.Visible;
+                    if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+                    else UpdateDlBar(null, EventArgs.Empty);
+                }
             }
         }
 
@@ -2538,6 +2770,9 @@ namespace StrinowaWPF
 
             _cfg.Fmt7z = AppSettings.LauncherDefault7z;
             _cfg.FmtExe = AppSettings.LauncherDefaultExe;
+            _cfg.GameLocation = string.IsNullOrWhiteSpace(AppSettings.GameDownloadLocation) ? "Game" : AppSettings.GameDownloadLocation;
+            _cfg.LauncherLocation = string.IsNullOrWhiteSpace(AppSettings.LauncherDownloadLocation) ? "Launcher" : AppSettings.LauncherDownloadLocation;
+            _cfg.AskDownloadLocation = AppSettings.AskDownloadLocation;
             _cfg.Save();
         }
 
@@ -2545,13 +2780,15 @@ namespace StrinowaWPF
             $"{choice.Source}|{choice.ResolvedBranch}|{choice.Version}";
 
         async Task<List<AllDownloadChoice>> ConfirmMultiDownloadInPanelAsync(
-            string version, List<AllDownloadChoice> choices)
+            string version, List<AllDownloadChoice> choices, int selectionGeneration = 0)
         {
-            if (_downloadConfirmSource != null) return [];
-            ShowDownloadPreparation($"Preparing multi-download {version}", "Reading branch sizes…");
+            _downloadConfirmSource?.TrySetResult(false);
+            ShowDownloadPreparation($"Preparing multi-download {version}", "Reading branch sizes…", selectionGeneration);
             choices = await PopulateMultiDownloadSizesAsync(choices);
+            if (selectionGeneration != 0 && !IsCurrentDownloadSelection(selectionGeneration)) return [];
             _downloadPreparationVisible = false;
-            _downloadConfirmSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _downloadConfirmSource = source;
             _multiDownloadChoices = choices.OrderBy(choice => choice.Date ?? DateTime.MaxValue)
                 .ThenBy(choice => choice.DisplayBranch, StringComparer.OrdinalIgnoreCase).ToList();
             _multiDownloadSelected.Clear();
@@ -2573,7 +2810,7 @@ namespace StrinowaWPF
 
             try
             {
-                var confirmed = await _downloadConfirmSource.Task;
+                var confirmed = await source.Task;
                 return confirmed
                     ? _multiDownloadChoices.Where(choice =>
                         _multiDownloadSelected.Contains(MultiDownloadChoiceId(choice))).ToList()
@@ -2581,16 +2818,19 @@ namespace StrinowaWPF
             }
             finally
             {
-                _downloadConfirmSource = null;
-                MultiDownloadPanel.Visibility = Visibility.Collapsed;
-                MultiChoiceRows.Children.Clear();
-                _multiDownloadChoices = [];
-                _multiDownloadSelected.Clear();
-                PauseBtn.Visibility = Visibility.Visible;
-                DlTrack.Visibility = Visibility.Visible;
-                DlFooterGrid.Visibility = Visibility.Visible;
-                if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
-                else UpdateDlBar(null, EventArgs.Empty);
+                if (ReferenceEquals(_downloadConfirmSource, source))
+                {
+                    _downloadConfirmSource = null;
+                    MultiDownloadPanel.Visibility = Visibility.Collapsed;
+                    MultiChoiceRows.Children.Clear();
+                    _multiDownloadChoices = [];
+                    _multiDownloadSelected.Clear();
+                    PauseBtn.Visibility = Visibility.Visible;
+                    DlTrack.Visibility = Visibility.Visible;
+                    DlFooterGrid.Visibility = Visibility.Visible;
+                    if (ActiveDownloads().Length == 0) DownloadPanel.Visibility = Visibility.Collapsed;
+                    else UpdateDlBar(null, EventArgs.Empty);
+                }
             }
         }
 
@@ -3518,14 +3758,6 @@ namespace StrinowaWPF
                 return;
             }
 
-            var (a1, b1, c1, _) = ParseVer(startV);
-            var (a2, b2, c2, _) = ParseVer(finishV);
-            if (a1 != a2 || b1 != b2 || c1 != c2)
-            {
-                AppendText("  advanced bruteforce only varies the 4th version segment.", TC.Warn);
-                return;
-            }
-
             source = source.ToLowerInvariant();
             if (source is not ("os" or "cn" or "pc"))
             {
@@ -3538,14 +3770,15 @@ namespace StrinowaWPF
             _bruteCts = new CancellationTokenSource();
             var token = _bruteCts.Token;
 
-            var seq = BuildAdvancedVersionSeq(startV, finishV);
-            int total = seq.Count, ok = 0, skip = 0, err = 0, done = 0;
+            var plan = BuildAdvancedVersionSeq(startV, finishV, source);
+            long total = plan.Total, done = 0;
+            int ok = 0, skip = 0, err = 0;
             var found = new List<(string ver, string url, string mode, string source, string branch)>();
             var started = DateTime.UtcNow;
 
             AppendLine([]);
             AppendLine([
-                new("  Bruteforcing", TC.Bold, true),
+                new("  Scanning", TC.Bold, true),
                 new("  ", TC.Dim),
                 new(launcherMode ? "Launcher" : "Game", TC.Release, true),
                 new($"  {branch}  {source.ToUpper()}  {startV} - {finishV}", TC.Dim),
@@ -3554,7 +3787,7 @@ namespace StrinowaWPF
 
             StartBruteProgress($"{startV} - {finishV}", total);
 
-            foreach (var ver in seq)
+            foreach (var ver in plan.Values)
             {
                 token.ThrowIfCancellationRequested();
 
@@ -3615,7 +3848,7 @@ namespace StrinowaWPF
 
             if (token.IsCancellationRequested)
             {
-                AppendText("  Bruteforce cancelled.", TC.Warn);
+                AppendText("  Scan cancelled.", TC.Warn);
                 return;
             }
 
@@ -3633,31 +3866,117 @@ namespace StrinowaWPF
                 SaveWinBuildsXml(found);
         }
 
-        List<string> BuildAdvancedVersionSeq(string startV, string finishV)
+        sealed record VersionScanPlan(long Total, IEnumerable<string> Values);
+
+        VersionScanPlan BuildAdvancedVersionSeq(string startV, string finishV, string source)
         {
             var (a1, b1, c1, d1) = ParseVer(startV);
-            var (_, _, _, d2) = ParseVer(finishV);
-            bool down = d1 > d2;
-            var seq = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var (a2, b2, c2, d2) = ParseVer(finishV);
+            var startBuildWidth = startV.Trim().Split('.')[3].Length;
+            var finishBuildWidth = finishV.Trim().Split('.')[3].Length;
+            if (finishBuildWidth > startBuildWidth)
+                throw new ArgumentException("The lowest build cannot use more digits than the highest build.");
+            var start = (a1, b1, c1, d1);
+            var finish = (a2, b2, c2, d2);
+            bool down = CompareVer(start, finish) >= 0;
+            int maxWidth = startBuildWidth;
+            bool expandShortForms = finishBuildWidth < maxWidth;
+            bool skipOs010 = source.Equals("os", StringComparison.OrdinalIgnoreCase);
 
-            for (int d = d1; down ? d >= d2 : d <= d2; d += down ? -1 : 1)
+            IEnumerable<(int a, int b, int c)> Prefixes()
             {
-                foreach (var tail in BuildNumberVariants(d))
+                if (!down)
                 {
-                    var ver = $"{a1}.{b1}.{c1}.{tail}";
-                    if (seen.Add(ver)) seq.Add(ver);
+                    // Ascending ranges are uncommon, but keeping them symmetric
+                    // makes the prompt predictable for either order.
+                    for (int a = a1; a <= a2; a++)
+                    {
+                        int bStart = a == a1 ? b1 : 0;
+                        int bEnd = a == a2 ? b2 : 10;
+                        for (int b = bStart; b <= bEnd; b++)
+                        {
+                            int cStart = a == a1 && b == bStart ? c1 : 0;
+                            int cEnd = a == a2 && b == b2 ? c2 : c1;
+                            for (int c = cStart; c <= cEnd; c++)
+                                yield return (a, b, c);
+                        }
+                    }
+                    yield break;
+                }
+
+                for (int a = a1; a >= a2; a--)
+                {
+                    // When crossing a major version, the branch convention uses
+                    // the 10-series before descending to the requested minor.
+                    int bStart = a == a1 ? b1 : 10;
+                    int bEnd = a == a2 ? b2 : 0;
+                    if (bStart > 10) bStart = 10;
+                    for (int b = bStart; b >= bEnd; b--)
+                    {
+                        int cStart = c1;
+                        int cEnd = a == a2 && b == b2 ? c2 : 0;
+                        if (cStart < cEnd) cStart = cEnd;
+                        for (int c = cStart; c >= cEnd; c--)
+                            yield return (a, b, c);
+                    }
                 }
             }
-            return seq;
+
+            long CountBuilds()
+            {
+                long count = 0;
+                foreach (var (a, b, c) in Prefixes())
+                {
+                    if (skipOs010 && a == 0 && b == 10 && c == 0) continue;
+                    count += CountBuildVariants(d1, d2, maxWidth, expandShortForms);
+                }
+                return count;
+            }
+
+            IEnumerable<string> Values()
+            {
+                foreach (var (a, b, c) in Prefixes())
+                {
+                    if (skipOs010 && a == 0 && b == 10 && c == 0) continue;
+                    foreach (var d in BuildNumbers(d1, d2))
+                    {
+                        foreach (var tail in BuildNumberVariants(d, maxWidth, expandShortForms))
+                            yield return $"{a}.{b}.{c}.{tail}";
+                    }
+                }
+            }
+
+            return new VersionScanPlan(CountBuilds(), Values());
+
+            IEnumerable<int> BuildNumbers(int high, int low)
+            {
+                int step = high >= low ? -1 : 1;
+                for (int value = high; step < 0 ? value >= low : value <= low; value += step)
+                    yield return value;
+            }
         }
 
-        static IEnumerable<string> BuildNumberVariants(int value)
+        static long CountBuildVariants(int high, int low, int maxWidth, bool expandShortForms)
         {
-            yield return value.ToString("0000");
-            yield return value.ToString("000");
-            yield return value.ToString("00");
-            yield return value.ToString("0");
+            long count = 0;
+            int step = high >= low ? -1 : 1;
+            for (int value = high; step < 0 ? value >= low : value <= low; value += step)
+            {
+                count++;
+                if (!expandShortForms) continue;
+                var digits = value.ToString().Length;
+                count += Math.Max(0, Math.Min(maxWidth - 1, maxWidth) - Math.Max(1, digits) + 1);
+            }
+            return count;
+        }
+
+        static IEnumerable<string> BuildNumberVariants(int value, int maxWidth, bool expandShortForms)
+        {
+            var raw = value.ToString();
+            yield return value.ToString($"D{maxWidth}");
+            if (!expandShortForms) yield break;
+            for (int width = maxWidth - 1; width >= Math.Max(1, raw.Length); width--)
+                yield return value.ToString($"D{width}");
         }
 
         string BuildBruteforceProbeUrl(string branch, string source, string version, bool launcherMode)
@@ -3671,7 +3990,7 @@ namespace StrinowaWPF
                 : $"{root}/{branch}/{version}/full_zip/manifest.txt";
         }
 
-        void StartBruteProgress(string range, int total)
+        void StartBruteProgress(string range, long total)
         {
             Dispatcher.Invoke(() =>
             {
@@ -3679,7 +3998,7 @@ namespace StrinowaWPF
                 if (!_bruteOwnsDownloadPanel) return;
                 _dlTimer?.Stop();
                 _dlTimer = null;
-                DlLabel.Text = "Bruteforcing";
+                DlLabel.Text = "Scanning";
                 DlStats.Text = "";
                 DlSubLabel.Text = range;
                 DlEta.Text = "";
@@ -3688,7 +4007,7 @@ namespace StrinowaWPF
             });
         }
 
-        void UpdateBruteProgress(int done, int total, string range, int found, DateTime started)
+        void UpdateBruteProgress(long done, long total, string range, int found, DateTime started)
         {
             Dispatcher.Invoke(() =>
             {
@@ -3720,7 +4039,7 @@ namespace StrinowaWPF
             string startV,
             string finishV,
             int ok,
-            int total,
+            long total,
             int skip,
             int err,
             List<(string ver, string url, string mode, string source, string branch)> found)
@@ -4177,12 +4496,14 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
                     if (folder.Equals("Launcher", StringComparison.OrdinalIgnoreCase))
                     {
                         var actualVer = IsValidVersion(ver) ? ver : (segs.Length > 1 ? segs[1] : ver);
+                        if (!IsValidVersion(actualVer)) continue;
                         branches.TryAdd("Launcher", new());
                         branches["Launcher"].Add(actualVer);
                     }
                     else
                     {
                         var actualVer = IsValidVersion(ver) ? ver : (IsValidVersion(segs[1]) ? segs[1] : ver);
+                        if (!IsValidVersion(actualVer)) continue;
                         branches.TryAdd(folder, new());
                         branches[folder].Add(actualVer);
                     }
@@ -4269,7 +4590,8 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
         }
 
         static bool IsValidVersion(string v) =>
-            Regex.IsMatch(v.Trim(), @"^\d+\.\d+\.\d+\.\d+$");
+            Regex.IsMatch(v.Trim(), @"^\d{1,4}\.\d{1,4}\.\d{1,4}\.\d{1,6}$",
+                RegexOptions.CultureInvariant);
 
         static (int a, int b, int c, int d) ParseVer(string v)
         {
@@ -4307,7 +4629,7 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             if (parts.Count == 0) return (null, null, null, gb, lb);
             var branch = LooksLikeBranch(parts[0]) ? parts[0] : null;
             string? ver = null, src = null;
-            if (parts.Count >= 2 && Regex.IsMatch(parts[1], @"^\d+(?:\.\d+){1,}$"))
+            if (parts.Count >= 2 && IsValidVersion(parts[1]))
             {
                 ver = parts[1];
                 if (parts.Count >= 3 && parts[2].ToLower() is "os" or "cn" or "pc" or "qq")
@@ -4477,7 +4799,7 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             e.Handled = true;
             if (_manifestScanner == null || !_manifestScanner.IsVisible)
             {
-                _manifestScanner = new Manifest(_cfg.WinBuildScan);
+                _manifestScanner = new Manifest(_cfg.WinBuildScan, CurrentUiScale);
                 _manifestScanner.Closed += (_, _) => _manifestScanner = null;
                 _manifestScanner.Show();
             }
@@ -4530,9 +4852,43 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
             });
         }
 
+        /* Bookmark feature disabled for now.
+        void BookmarkBtn_Click(object s, RoutedEventArgs e)
+        {
+            var dlg = new Bookmarks(this);
+            dlg.Show();
+        }
+
+        public async void ScanBookmark(string branch)
+        {
+            if (_busy || string.IsNullOrWhiteSpace(branch)) return;
+            _busy = true;
+            ChevronBlock.Foreground = TC.Dim;
+            try
+            {
+                ShowHeader();
+                var ctx = branch.Equals("Game_All", StringComparison.OrdinalIgnoreCase) ||
+                          branch.Equals("Launcher_All", StringComparison.OrdinalIgnoreCase)
+                    ? await ScanAllBranchesAsync(branch.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher" : "Game", "pc")
+                    : await ScanBranchAsync(branch, "pc", null);
+                if (ctx != null) SetHint("<version>  or  <branch>  or  <branch -b>");
+            }
+            catch (Exception ex)
+            {
+                AppendText($"  bookmark scan failed: {ex.Message}", TC.Warn);
+                ShowModernError(ex, "Bookmark scan failed");
+            }
+            finally
+            {
+                _busy = false;
+                ChevronBlock.Foreground = TC.Pink;
+            }
+        }
+        */
+
         void CloseBtn_Click(object s, RoutedEventArgs e)
         {
-            _cfg.Width = Math.Max(560, (int)Math.Round(ActualWidth / _uiScale - WindowFrameAllowance));
+            _cfg.Width = Math.Clamp((int)Math.Round(ActualWidth / _uiScale - WindowFrameAllowance), 760, 1920);
             _cfg.Height = Math.Max(380, (int)Math.Round(ActualHeight / _uiScale - WindowFrameAllowance));
             _cfg.Theme = AppTheme.CurrentTheme.ToString();
             _cfg.Color = AppTheme.CurrentTermPreset.ToString();
@@ -4560,7 +4916,7 @@ MergeSources(Dictionary<string, (string root, List<string> vers, Dictionary<stri
         void Window_SizeChanged(object s, SizeChangedEventArgs e) => UpdateWindowClip();
         void LogoBtn_Click(object s, RoutedEventArgs e)
         {
-            var dlg = new About();
+            var dlg = new About(this);
             dlg.Show();
         }
 

@@ -17,12 +17,12 @@ namespace StrinowaWPF;
 public partial class Manifest : Window
 {
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
-    static readonly Regex FullVersion = new(@"^(?<prefix>\d+(?:\.\d+){1,2})\.(?<build>\d+)$", RegexOptions.Compiled);
-    static readonly Regex BuildOnly = new(@"^\d+$", RegexOptions.Compiled);
+    static readonly Regex FullVersion = new(@"^(?<prefix>\d{1,4}(?:\.\d{1,4}){2})\.(?<build>\d{1,6})$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    static readonly Regex BuildOnly = new(@"^\d{1,6}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     static readonly Dictionary<string, string> Roots = new()
     {
         ["OS"] = "https://resource-download.strinova.com/Client/Win/GameDepot/",
-        ["CN"] = "https://klbq-cdn-1300343128.cos.ap-shanghai.myqcloud.com/Client/Win/GameDepot/",
+        ["CN"] = "https://klbq-cdn-1300343128.cos.ap-shanghai.tencentcos.cn/Client/Win/GameDepot/",
         ["PC"] = "https://klbqcp-client-cdn.gxpan.cn/Client/Win/GameDepot/",
         ["QQ"] = "https://down.klbq.qq.com/Client/Win/GameDepot/",
     };
@@ -34,13 +34,19 @@ public partial class Manifest : Window
     string? _savedOutputPath;
     readonly bool _winBuildScan;
 
-    public Manifest(bool winBuildScan = true)
+    public Manifest(bool winBuildScan = true, int uiScale = 100)
     {
         _winBuildScan = winBuildScan;
         InitializeComponent();
+        ApplyUiScale(uiScale);
         AppTheme.ApplyToManifest(this);
         ScannerProgressTrack.SizeChanged += (_, _) => SetProgress(_progressFraction);
         SaveResultsButton.IsEnabled = false;
+    }
+
+    public void ApplyUiScale(int percent)
+    {
+        WindowScale.Apply(this, RootBorder, percent, 610, 520);
     }
 
     public void ApplyTheme()
@@ -121,14 +127,13 @@ public partial class Manifest : Window
             if (string.IsNullOrWhiteSpace(channel)) throw new ArgumentException("Channel cannot be empty.");
             if (!int.TryParse(RateBox.Text.Trim(), out var rate) || rate < 1) throw new ArgumentException("Checks per second must be a positive number.");
 
-            var (prefix, high, width, low, lowWidth) = ParseRange(HighBox.Text, LowBox.Text);
-            if (low > high) throw new ArgumentException("The lowest build cannot be greater than the highest build.");
+            var plan = BuildScanPlan(HighBox.Text, LowBox.Text, server);
 
             var mode = channel.StartsWith("Launcher_", StringComparison.OrdinalIgnoreCase) ? "Launcher" : "Game";
             var allBranches = channel.Equals("Game_All", StringComparison.OrdinalIgnoreCase) ||
                               channel.Equals("Launcher_All", StringComparison.OrdinalIgnoreCase);
             var branches = allBranches ? BranchCatalog.Get(server, mode) : new[] { channel };
-            var total = checked(CountCandidates(high, width, low, lowWidth) * branches.Count);
+            var total = checked(plan.Total * branches.Count);
             _scanCts = new CancellationTokenSource();
             StartButton.IsEnabled = false;
             CancelButton.IsEnabled = true;
@@ -140,7 +145,7 @@ public partial class Manifest : Window
             SaveResultsButton.IsEnabled = false;
             SetProgress(0);
             StatusText.Text = $"Preparing {total:N0} manifest paths…";
-            await ScanAsync(Roots[server], server, channel, mode, branches, prefix, high, width, low, lowWidth, rate, total, _scanCts.Token);
+            await ScanAsync(Roots[server], server, channel, mode, branches, plan.Values, rate, total, _scanCts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -162,21 +167,105 @@ public partial class Manifest : Window
 
     void Cancel_Click(object sender, RoutedEventArgs e) => _scanCts?.Cancel();
 
-    static (string prefix, int high, int highWidth, int low, int lowWidth) ParseRange(string highValue, string lowValue)
+    sealed record ScanPlan(long Total, IEnumerable<string> Values);
+
+    static ScanPlan BuildScanPlan(string highValue, string lowValue, string server)
     {
         var high = ParseBoundary(highValue, "Highest");
         var low = ParseBoundary(lowValue, "Lowest");
-        var prefix = high.prefix ?? low.prefix
-            ?? throw new ArgumentException("At least one endpoint must include a version prefix, such as 0.0.100000 or 0.7.0.7000.");
+        var highPrefix = high.prefix ?? low.prefix ?? "0.0.0";
+        var lowPrefix = low.prefix ?? highPrefix;
 
-        if (high.prefix != null && low.prefix != null &&
-            !high.prefix.Equals(low.prefix, StringComparison.Ordinal))
-            throw new ArgumentException("Versions must share the same prefix.");
+        var hp = ParsePrefix(highPrefix);
+        var lp = ParsePrefix(lowPrefix);
+        var hd = int.Parse(high.digits);
+        var ld = int.Parse(low.digits);
         if (low.digits.Length > high.digits.Length)
-            throw new ArgumentException("The low build cannot be wider than the high build.");
+            throw new ArgumentException("The lowest build cannot use more digits than the highest build.");
+        var highVersion = (hp.a, hp.b, hp.c, hd);
+        var lowVersion = (lp.a, lp.b, lp.c, ld);
+        if (CompareVersion(highVersion, lowVersion) < 0)
+            throw new ArgumentException("The lowest version/build cannot be greater than the highest version/build.");
 
-        return (prefix, int.Parse(high.digits), high.digits.Length,
-            int.Parse(low.digits), low.digits.Length);
+        int maxWidth = high.digits.Length;
+        bool expandShortForms = low.digits.Length < maxWidth;
+        bool skipOs010 = server.Equals("OS", StringComparison.OrdinalIgnoreCase);
+
+        IEnumerable<(int a, int b, int c)> Prefixes()
+        {
+            for (int a = hp.a; a >= lp.a; a--)
+            {
+                int bStart = a == hp.a ? hp.b : 10;
+                int bEnd = a == lp.a ? lp.b : 0;
+                bStart = Math.Min(10, Math.Max(0, bStart));
+                for (int b = bStart; b >= bEnd; b--)
+                {
+                    int cStart = hp.c;
+                    int cEnd = a == lp.a && b == lp.b ? lp.c : 0;
+                    for (int c = cStart; c >= cEnd; c--)
+                        yield return (a, b, c);
+                }
+            }
+        }
+
+        long BuildCount()
+        {
+            long count = 0;
+            foreach (var (a, b, c) in Prefixes())
+            {
+                if (skipOs010 && a == 0 && b == 10 && c == 0) continue;
+                count += CountBuilds(hd, ld, maxWidth, expandShortForms);
+            }
+            return count;
+        }
+
+        IEnumerable<string> Values()
+        {
+            foreach (var (a, b, c) in Prefixes())
+            {
+                if (skipOs010 && a == 0 && b == 10 && c == 0) continue;
+                for (int build = hd; build >= ld; build--)
+                    foreach (var suffix in BuildVariants(build, maxWidth, expandShortForms))
+                        yield return $"{a}.{b}.{c}.{suffix}";
+            }
+        }
+
+        return new ScanPlan(BuildCount(), Values());
+    }
+
+    static (int a, int b, int c) ParsePrefix(string prefix)
+    {
+        var parts = prefix.Split('.');
+        if (parts.Length != 3) throw new ArgumentException("Version prefixes must contain three numeric segments.");
+        return (int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]));
+    }
+
+    static int CompareVersion((int a, int b, int c, int d) x, (int a, int b, int c, int d) y)
+    {
+        var a = x.a.CompareTo(y.a); if (a != 0) return a;
+        var b = x.b.CompareTo(y.b); if (b != 0) return b;
+        var c = x.c.CompareTo(y.c); return c != 0 ? c : x.d.CompareTo(y.d);
+    }
+
+    static long CountBuilds(int high, int low, int maxWidth, bool expandShortForms)
+    {
+        long count = 0;
+        for (var build = high; build >= low; build--)
+        {
+            count++;
+            if (expandShortForms)
+                count += Math.Max(0, maxWidth - Math.Max(1, build.ToString().Length));
+        }
+        return count;
+    }
+
+    static IEnumerable<string> BuildVariants(int build, int maxWidth, bool expandShortForms)
+    {
+        yield return build.ToString($"D{maxWidth}");
+        if (!expandShortForms) yield break;
+        var shortest = Math.Max(1, build.ToString().Length);
+        for (var width = maxWidth - 1; width >= shortest; width--)
+            yield return build.ToString($"D{width}");
     }
 
     static (string? prefix, string digits) ParseBoundary(string value, string label)
@@ -185,32 +274,11 @@ public partial class Manifest : Window
         var m = FullVersion.Match(value);
         if (m.Success) return (m.Groups["prefix"].Value, m.Groups["build"].Value);
         if (BuildOnly.IsMatch(value)) return (null, value);
-        throw new ArgumentException($"{label} value must be a build number, a three-part version, or a four-part version.");
-    }
-
-    static long CountCandidates(int high, int highWidth, int low, int lowWidth)
-    {
-        long count = 0;
-        for (var build = high; build >= low; build--)
-        {
-            var naturalWidth = build.ToString().Length;
-            count += highWidth - naturalWidth + 1;
-        }
-        return count;
-    }
-
-    static IEnumerable<string> Versions(string prefix, int high, int highWidth, int low, int lowWidth)
-    {
-        for (var build = high; build >= low; build--)
-        {
-            var shortest = build.ToString().Length;
-            for (var digits = shortest; digits <= highWidth; digits++)
-                yield return $"{prefix}.{build.ToString().PadLeft(digits, '0')}";
-        }
+        throw new ArgumentException($"{label} value must be a build number or a four-part version (a.b.c.dddddd).");
     }
 
     async Task ScanAsync(string root, string server, string channel, string mode, IReadOnlyList<string> branches,
-        string prefix, int high, int width, int low, int lowWidth, int rate, long total, CancellationToken token)
+        IEnumerable<string> versions, int rate, long total, CancellationToken token)
     {
         var queue = Channel.CreateBounded<(string version, string branch)>(new BoundedChannelOptions(256) { SingleWriter = true });
         var found = new ConcurrentBag<ScanResult>();
@@ -250,7 +318,7 @@ public partial class Manifest : Window
         try
         {
             foreach (var branch in branches)
-                foreach (var version in Versions(prefix, high, width, low, lowWidth))
+                foreach (var version in versions)
                     await queue.Writer.WriteAsync((version, branch), token);
             queue.Writer.TryComplete();
             await Task.WhenAll(workers);

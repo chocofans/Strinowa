@@ -90,7 +90,7 @@
                     <TextBlock x:Name="AppVersion"
                                FontFamily="Segoe UI Variable Display, Segoe UI"
                                FontSize="12" Foreground="#AAAAAA" Margin="0,0,0,10">
-                        Version 0.7.2.0629.20260714.0949
+                        Version 0.77.90.0723.20260723.1216 Beta
                     </TextBlock>
 
                     <Rectangle Height="1" Fill="#2E2E38" Margin="0,0,0,10"/>
